@@ -39,7 +39,15 @@ class ReasonCode:
     PASTE_LOW = "PASTE_LOW"
     STENCIL_WIPE = "STENCIL_WIPE"
     CONVEYOR_JAM = "CONVEYOR_JAM"
+    VISION_FAULT = "VISION_FAULT"            # camera / lighting error (SPI, AOI)
+    HEAD_SERVO_FAULT = "HEAD_SERVO_FAULT"    # pick-and-place head drive wear-out
+    HEATER_FAULT = "HEATER_FAULT"            # reflow zone heater / thermocouple
+    FIXTURE_FAULT = "FIXTURE_FAULT"          # ICT bed-of-nails contact problem
     MANUAL_STOP = "MANUAL_STOP"    # injected by a test or scenario
+
+
+# Every reason code string, so config typos are caught at startup.
+ALL_REASON_CODES = {v for k, v in vars(ReasonCode).items() if not k.startswith("_")}
 
 
 @dataclass(frozen=True)

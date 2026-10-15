@@ -13,30 +13,85 @@ line:
   buffer_capacity: 5   # max boards waiting on each inter-station conveyor
 
   # Listed upstream -> downstream. The order here IS the line order.
+  #
+  # Per station:
+  #   cycle_time_sd_s   normal jitter added to each board's cycle time
+  #                     (clipped so a board is never faster than ideal)
+  #   failures          list of failure modes. Time to failure counts RUNNING
+  #                     time only. Repairs are lognormal (median + log-sigma).
+  #     exponential:    mtbf_s                  constant hazard (random faults)
+  #     weibull:        shape (>1), scale_s     rising hazard (wear-out)
   stations:
     - name: printer
       type: printer
       cycle_time_s: 22.0
+      cycle_time_sd_s: 1.0
+      failures:
+        - reason: CONVEYOR_JAM
+          distribution: exponential
+          mtbf_s: 21600             # 6 h of running
+          repair_median_s: 120
+          repair_sigma: 0.5
 
     - name: spi
       type: spi
       cycle_time_s: 20.0
+      cycle_time_sd_s: 0.5
+      failures:
+        - reason: VISION_FAULT
+          distribution: exponential
+          mtbf_s: 28800             # 8 h
+          repair_median_s: 300
+          repair_sigma: 0.6
 
     - name: pnp
       type: pnp
       board_handling_s: 8.0          # transfer in/out + fiducial alignment
       time_per_component_s: 0.25     # 8 + 0.25 * 120 = 38 s/board -> bottleneck
+      cycle_time_sd_s: 1.5
+      failures:
+        - reason: CONVEYOR_JAM
+          distribution: exponential
+          mtbf_s: 14400             # 4 h
+          repair_median_s: 180
+          repair_sigma: 0.5
+        - reason: HEAD_SERVO_FAULT
+          distribution: weibull
+          shape: 2.5                # wear-out: hazard grows with running age
+          scale_s: 36000            # characteristic life 10 h of running
+          repair_median_s: 1200
+          repair_sigma: 0.6
 
     - name: reflow
       type: reflow
       transit_time_s: 300.0          # time for a board to cross the oven
       conveyor_length_mm: 4000.0
       board_pitch_mm: 250.0          # min spacing -> 16 boards max, 1 entry / 18.75 s
+      failures:
+        - reason: HEATER_FAULT
+          distribution: exponential
+          mtbf_s: 86400             # 24 h
+          repair_median_s: 900
+          repair_sigma: 0.5
 
     - name: aoi
       type: aoi
       cycle_time_s: 25.0
+      cycle_time_sd_s: 0.8
+      failures:
+        - reason: VISION_FAULT
+          distribution: exponential
+          mtbf_s: 28800
+          repair_median_s: 300
+          repair_sigma: 0.6
 
     - name: ict
       type: ict
       cycle_time_s: 30.0
+      cycle_time_sd_s: 1.0
+      failures:
+        - reason: FIXTURE_FAULT
+          distribution: exponential
+          mtbf_s: 21600
+          repair_median_s: 300
+          repair_sigma: 0.7

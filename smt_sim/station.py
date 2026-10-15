@@ -7,6 +7,8 @@ Each tick a station does at most these things, in order:
   3. If it is empty, pull the next board from the input buffer
      (or go STARVED if there is none).
   4. Work on the current board for one tick (RUNNING).
+  5. If it ran this tick, age its failure modes; a failure takes it DOWN
+     from the next tick for a random repair time.
 
 Timing note: a board's cycle starts on the tick it is pulled and finishes once
 `dt` has been subtracted enough times, so cycle times are effectively rounded
@@ -19,6 +21,7 @@ import numpy as np
 
 from smt_sim.board import Board
 from smt_sim.events import Event, EventLog, StationState
+from smt_sim.failures import FailureMode
 
 
 class BoardInput(Protocol):
@@ -29,6 +32,10 @@ class BoardInput(Protocol):
 
 
 class Station:
+    # True for stations that hold many boards at once (the reflow conveyor).
+    # Metrics treat these differently; see metrics.py.
+    is_pipeline = False
+
     def __init__(
         self,
         name: str,
@@ -43,7 +50,8 @@ class Station:
         self.input_buffer = input_buffer
         self.output_buffer = output_buffer
         self.event_log = event_log
-        self.rng = rng   # unused until milestone 3, but every component gets the shared RNG
+        self.rng = rng   # the run's single shared generator
+        self.failure_modes = [FailureMode(f, rng) for f in params.get("failures", [])]
 
         self.state = StationState.STARVED
         self.reason_code: str | None = None
@@ -85,6 +93,8 @@ class Station:
             return
 
         self._process(dt_s)
+        if self.state == StationState.RUNNING:
+            self._age_failure_modes(dt_s)
 
     # ---- internals --------------------------------------------------------
 
@@ -105,11 +115,29 @@ class Station:
                 return
             self.current_board = self.input_buffer.pop()
             self.current_board.time_in_s[self.name] = self._time_s
-            self.remaining_s = self.cycle_time_for(self.current_board)
+            self.remaining_s = self._sample_cycle_time(self.current_board)
 
         # 3. Work on it.
         self._set_state(StationState.RUNNING)
         self.remaining_s -= dt_s
+
+    def _sample_cycle_time(self, board: Board) -> float:
+        """Actual time for this board: ideal plus normal jitter.
+
+        Clipped at the ideal cycle time, because the ideal is by definition
+        the fastest the machine can go; disturbances only slow it down.
+        """
+        ideal_s = self.cycle_time_for(board)
+        sd_s = self.params.get("cycle_time_sd_s", 0.0)
+        if sd_s <= 0:
+            return ideal_s
+        return max(ideal_s, ideal_s + self.rng.normal(0.0, sd_s))
+
+    def _age_failure_modes(self, dt_s: float) -> None:
+        for mode in self.failure_modes:
+            if mode.advance(dt_s):
+                self.force_down(mode.reason_code, mode.sample_repair_s())
+                return   # one failure at a time
 
     def _finish_board(self, board: Board) -> None:
         board.time_out_s[self.name] = self._time_s

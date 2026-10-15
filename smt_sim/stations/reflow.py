@@ -29,6 +29,8 @@ class _BoardInOven:
 
 
 class ReflowOven(Station):
+    is_pipeline = True
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.transit_time_s = float(self.params["transit_time_s"])
@@ -36,6 +38,9 @@ class ReflowOven(Station):
         self.entry_interval_s = self.transit_time_s / self.capacity
         self.conveyor: deque[_BoardInOven] = deque()   # leftmost = closest to exit
         self._since_last_entry_s = self.entry_interval_s  # first board may enter at once
+        # Sim time each board entered, like a board-in sensor at the entrance.
+        # Used to judge the oven by its entrance for bottleneck detection.
+        self.entry_times_s: list[float] = []
 
     def cycle_time_for(self, board: Board) -> float:
         return self.entry_interval_s
@@ -59,6 +64,7 @@ class ReflowOven(Station):
             board.time_in_s[self.name] = self._time_s
             self.conveyor.append(_BoardInOven(board, self.transit_time_s))
             self._since_last_entry_s = 0.0
+            self.entry_times_s.append(self._time_s)
 
         # 3. Move the belt.
         self._since_last_entry_s += dt_s

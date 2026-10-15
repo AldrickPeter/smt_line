@@ -78,6 +78,7 @@ class StationOEE:
     blocked_s: float
     boards_processed: int
     ideal_cycle_s: float
+    utilization: float   # ideal cycle × boards / planned: share of capacity actually used
     availability: float
     performance: float
     quality: float
@@ -98,10 +99,14 @@ def station_oee(sim: Simulator) -> dict[str, StationOEE]:
                     removed from the denominator and reported separately.
     performance   = ideal cycle × boards processed / running
     quality       = 1.0 until inspection exists (milestone 5)
+    utilization   = ideal cycle × boards processed / planned
+                    How much of the station's capacity was used. Not part of
+                    OEE; low utilization on a non-bottleneck is normal.
 
-    Note for the reflow oven: it is RUNNING whenever any board is inside, and
-    its ideal cycle is the entry interval. Its performance therefore reads as
-    "fraction of loading slots used", which is low for a non-bottleneck oven.
+    Pipeline stations (the reflow oven) are RUNNING whenever any board is
+    inside. Their belt moves at a fixed speed, so they cannot lose speed:
+    performance is 1.0 by definition. How full the oven runs (e.g. 8 of 16
+    slots) shows up as utilization instead.
     """
     tis = time_in_state(state_intervals(sim.event_log, sim.time_s))
     result = {}
@@ -114,7 +119,10 @@ def station_oee(sim: Simulator) -> dict[str, StationOEE]:
         ideal_cycle_s = sim.ideal_cycle_time_s(st.name)
 
         availability = _ratio(running_s, planned_s - starved_s - blocked_s)
-        performance = _ratio(ideal_cycle_s * st.part_count, running_s)
+        if st.is_pipeline:
+            performance = 1.0
+        else:
+            performance = _ratio(ideal_cycle_s * st.part_count, running_s)
         quality = 1.0
         result[st.name] = StationOEE(
             planned_s=planned_s,
@@ -123,6 +131,7 @@ def station_oee(sim: Simulator) -> dict[str, StationOEE]:
             blocked_s=blocked_s,
             boards_processed=st.part_count,
             ideal_cycle_s=ideal_cycle_s,
+            utilization=_ratio(ideal_cycle_s * st.part_count, planned_s),
             availability=availability,
             performance=performance,
             quality=quality,
@@ -200,25 +209,47 @@ class BottleneckResult:
     confirmed: bool   # upstream mostly blocked AND downstream mostly starved
 
 
-def active_periods(intervals: list[Interval], station: str) -> list[float]:
-    """Durations of uninterrupted active periods for one station.
+def active_spans(sim: Simulator, intervals: list[Interval], station_name: str) -> list[tuple[float, float]]:
+    """(start, end) spans during which a station counts as "active".
 
-    "Active" means anything except waiting (STARVED or BLOCKED): running,
-    and also being down, in setup, etc., because the station is busy with
-    its own work and the rest of the line has to wait for it. Consecutive
-    active intervals (e.g. RUNNING -> DOWN -> RUNNING) merge into one period.
+    Normal stations: active = any state except waiting (STARVED or BLOCKED).
+    That includes RUNNING and also DOWN, SETUP, etc.: the station is busy
+    with its own business and the rest of the line has to wait for it.
+
+    Pipeline stations (reflow oven) would look active almost all the time,
+    because some board is nearly always inside. They are judged at their
+    entrance instead: active for one entry interval after each board enters
+    (the entrance is busy spacing boards), plus any own stops (DOWN, ...).
+    Approximation: an entry window that overlaps a BLOCKED period still
+    counts as active.
+    """
+    station = sim.station(station_name)
+    own = [iv for iv in intervals if iv.station == station_name]
+    if not station.is_pipeline:
+        return [(iv.start_s, iv.end_s) for iv in own if iv.state not in WAITING_STATES]
+
+    stops = [(iv.start_s, iv.end_s) for iv in own if iv.state in STOP_STATES]
+    window_s = station.entry_interval_s
+    entries = [(t, min(t + window_s, sim.time_s)) for t in station.entry_times_s]
+    return stops + entries
+
+
+def merge_spans(spans: list[tuple[float, float]]) -> list[float]:
+    """Merge overlapping or touching spans; return the merged durations.
+
+    E.g. RUNNING 0-30 then DOWN 30-50 is one uninterrupted 50 s active period.
     """
     periods = []
-    current_s = 0.0
-    for iv in sorted((iv for iv in intervals if iv.station == station), key=lambda iv: iv.start_s):
-        if iv.state in WAITING_STATES:
-            if current_s > 0:
-                periods.append(current_s)
-            current_s = 0.0
-        else:
-            current_s += iv.duration_s
-    if current_s > 0:
-        periods.append(current_s)
+    cur_start = cur_end = None
+    for start, end in sorted(spans):
+        if cur_end is not None and start <= cur_end:
+            cur_end = max(cur_end, end)
+            continue
+        if cur_end is not None:
+            periods.append(cur_end - cur_start)
+        cur_start, cur_end = start, end
+    if cur_end is not None:
+        periods.append(cur_end - cur_start)
     return periods
 
 
@@ -231,18 +262,26 @@ def find_bottleneck(sim: Simulator) -> BottleneckResult:
     stations downstream more time starved than blocked.
     """
     intervals = state_intervals(sim.event_log, sim.time_s)
+    tis = time_in_state(intervals)
     names = [st.name for st in sim.stations]
 
-    mean_active = {}
+    mean_active: dict[str, float] = {}
+    starved: dict[str, float] = {}
+    blocked: dict[str, float] = {}
     for name in names:
-        periods = active_periods(intervals, name)
+        periods = merge_spans(active_spans(sim, intervals, name))
         mean_active[name] = sum(periods) / len(periods) if periods else 0.0
+        blocked[name] = tis[name][StationState.BLOCKED]
+        if sim.station(name).is_pipeline:
+            # Entrance idle and not blocked = waiting for boards from upstream.
+            starved[name] = max(0.0, sim.time_s - sum(periods) - blocked[name])
+        else:
+            starved[name] = tis[name][StationState.STARVED]
     bottleneck = max(names, key=lambda n: mean_active[n])
 
-    tis = time_in_state(intervals)
     idx = names.index(bottleneck)
-    upstream_ok = all(tis[n][StationState.BLOCKED] >= tis[n][StationState.STARVED] for n in names[:idx])
-    downstream_ok = all(tis[n][StationState.STARVED] >= tis[n][StationState.BLOCKED] for n in names[idx + 1:])
+    upstream_ok = all(blocked[n] >= starved[n] for n in names[:idx])
+    downstream_ok = all(starved[n] >= blocked[n] for n in names[idx + 1:])
     return BottleneckResult(bottleneck, mean_active, upstream_ok and downstream_ok)
 
 
@@ -259,12 +298,13 @@ def format_report(sim: Simulator) -> str:
     )
     lines.append("")
     lines.append(f"{'station':10s} {'running':>8s} {'starved':>8s} {'blocked':>8s}"
-                 f" {'avail':>7s} {'perf':>7s} {'OEE':>7s} {'boards':>7s}")
+                 f" {'avail':>7s} {'perf':>7s} {'OEE':>7s} {'util':>7s} {'boards':>7s}")
     for name, m in station_oee(sim).items():
         p = m.planned_s
         lines.append(
             f"{name:10s} {m.running_s / p:8.1%} {m.starved_s / p:8.1%} {m.blocked_s / p:8.1%}"
-            f" {m.availability:7.1%} {m.performance:7.1%} {m.oee:7.1%} {m.boards_processed:7d}"
+            f" {m.availability:7.1%} {m.performance:7.1%} {m.oee:7.1%} {m.utilization:7.1%}"
+            f" {m.boards_processed:7d}"
         )
 
     bn = find_bottleneck(sim)

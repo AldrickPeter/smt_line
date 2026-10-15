@@ -1,15 +1,18 @@
 """Milestone 1: deterministic line — flow, bottleneck rate, update order, propagation."""
 
-import copy
-
 import pytest
 
 from smt_sim import Simulator
 from smt_sim.buffer import Buffer
-from smt_sim.config import load_config
+from smt_sim.config import load_config, make_deterministic
 from smt_sim.events import ReasonCode, StationState
 
 PNP_CYCLE_S = 8.0 + 0.25 * 120   # from config/default.yaml: 38 s, the bottleneck
+
+
+def deterministic_sim() -> Simulator:
+    """The default line with jitter and failures switched off."""
+    return Simulator(make_deterministic(load_config()))
 
 
 def boards_out_between(sim: Simulator, start_s: float, end_s: float) -> int:
@@ -32,7 +35,7 @@ def test_buffer_respects_capacity():
 
 
 def test_steady_state_throughput_equals_bottleneck_rate():
-    sim = Simulator()
+    sim = deterministic_sim()
     window_s = 2 * 3600
     # Skip the first hour so the line is full (warm-up), then measure 2 hours.
     out = boards_out_between(sim, 3600, 3600 + window_s)
@@ -41,7 +44,7 @@ def test_steady_state_throughput_equals_bottleneck_rate():
 
 
 def test_bottleneck_never_starved_or_blocked_in_steady_state():
-    sim = Simulator()
+    sim = deterministic_sim()
     sim.run(3600)
     n_events_before = len(sim.event_log.for_station("pnp"))
     sim.run(3600)
@@ -56,7 +59,7 @@ def test_downstream_first_update_order_keeps_balanced_line_at_full_rate():
     This only works if a slot freed downstream is reusable upstream in the
     same tick, which is what the downstream-to-upstream order guarantees.
     """
-    cfg = copy.deepcopy(load_config())
+    cfg = make_deterministic(load_config())
     cfg["line"]["buffer_capacity"] = 1
     for st in cfg["line"]["stations"]:
         if st["type"] == "pnp":
@@ -71,7 +74,7 @@ def test_downstream_first_update_order_keeps_balanced_line_at_full_rate():
 
 
 def test_reflow_is_a_pipeline_with_fixed_transit_time():
-    sim = Simulator()
+    sim = deterministic_sim()
     sim.run(3600)
     oven = sim.station("reflow")
     assert oven.capacity == 16
@@ -82,7 +85,7 @@ def test_reflow_is_a_pipeline_with_fixed_transit_time():
 
 
 def test_stoppage_propagates_starved_downstream_and_blocked_upstream():
-    sim = Simulator()
+    sim = deterministic_sim()
     sim.run(3600)   # reach steady state
     sim.station("pnp").force_down(ReasonCode.MANUAL_STOP, duration_s=900)
     sim.run(880)    # long enough for the oven (300 s transit) to empty
@@ -108,7 +111,7 @@ def test_stoppage_propagates_starved_downstream_and_blocked_upstream():
 
 
 def test_event_log_records_the_down_event_with_reason():
-    sim = Simulator()
+    sim = deterministic_sim()
     sim.run(600)
     sim.station("pnp").force_down(ReasonCode.MANUAL_STOP, duration_s=60)
     sim.run(120)
@@ -122,7 +125,7 @@ def test_event_log_records_the_down_event_with_reason():
 
 
 def test_get_tags_is_flat_and_primitive():
-    sim = Simulator()
+    sim = deterministic_sim()
     sim.run(600)
     tags = sim.get_tags()
     assert tags["pnp"]["state"] in {s.value for s in StationState}

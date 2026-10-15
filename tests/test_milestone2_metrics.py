@@ -11,6 +11,7 @@ import math
 import pytest
 
 from smt_sim import Simulator
+from smt_sim.config import load_config, make_deterministic
 from smt_sim.events import ReasonCode, StationState
 from smt_sim.metrics import (
     downtime_pareto,
@@ -21,6 +22,11 @@ from smt_sim.metrics import (
     station_oee,
     time_in_state,
 )
+
+
+def deterministic_sim() -> Simulator:
+    """The default line with jitter and failures switched off."""
+    return Simulator(make_deterministic(load_config()))
 
 
 def tiny_config(cycle_times_s: dict[str, float], buffer_capacity: int = 1) -> dict:
@@ -114,7 +120,7 @@ def test_two_stations_starved_and_blocked():
 
 
 def test_time_in_state_covers_every_second():
-    sim = Simulator()
+    sim = deterministic_sim()
     sim.run(3600)
     sim.station("pnp").force_down(ReasonCode.NOZZLE_CLOG, duration_s=300)
     sim.run(3600)
@@ -123,7 +129,7 @@ def test_time_in_state_covers_every_second():
 
 
 def test_default_line_bottleneck_is_pnp():
-    sim = Simulator()
+    sim = deterministic_sim()
     sim.run(8 * 3600)
     bn = find_bottleneck(sim)
     assert bn.station == "pnp"
@@ -131,7 +137,7 @@ def test_default_line_bottleneck_is_pnp():
 
 
 def test_pareto_ranks_largest_stop_first():
-    sim = Simulator()
+    sim = deterministic_sim()
     sim.run(1000)
     sim.station("printer").force_down(ReasonCode.PASTE_LOW, duration_s=60)
     sim.station("pnp").force_down(ReasonCode.NOZZLE_CLOG, duration_s=200)
@@ -156,7 +162,7 @@ def test_never_running_station_gives_nan_not_crash():
 
 
 def test_event_log_csv_export(tmp_path):
-    sim = Simulator()
+    sim = deterministic_sim()
     sim.run(600)
     path = tmp_path / "events.csv"
     sim.event_log.to_csv(path)
@@ -168,7 +174,7 @@ def test_event_log_csv_export(tmp_path):
 
 
 def test_report_renders():
-    sim = Simulator()
+    sim = deterministic_sim()
     sim.run(3600)
     text = format_report(sim)
     assert "Line OEE" in text and "Bottleneck: pnp" in text
