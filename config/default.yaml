@@ -5,17 +5,51 @@ sim:
   tick_s: 0.5          # simulated seconds per step()
   seed: 42             # one RNG per run, created from this seed
 
-product:
-  name: CTRL-BOARD-A
-  bom:                 # part number -> quantity per board (120 parts in total)
-    R0402-10K: 40
-    C0402-100N: 50
-    C0805-10U: 12
-    LED0603-GRN: 8
-    SOT23-NMOS: 6
-    SOIC8-EEPROM: 2
-    QFN32-MCU: 1
-    USBC-CONN: 1
+# Each product: its BOM (part number -> quantity per board) and reflow peak
+# temperature. Pick-and-place time scales with the part count:
+#   A 120 parts -> 38 s, B 104 -> 34 s, C 96 -> 32 s (all slower than the
+#   other stations, so pick-and-place stays the bottleneck for every product).
+products:
+  CTRL-BOARD-A:
+    reflow_peak_c: 245
+    bom:
+      R0402-10K: 40
+      C0402-100N: 50
+      C0805-10U: 12
+      LED0603-GRN: 8
+      SOT23-NMOS: 6
+      SOIC8-EEPROM: 2
+      QFN32-MCU: 1
+      USBC-CONN: 1
+  SENSOR-BOARD-B:      # shares 4 part numbers with A
+    reflow_peak_c: 240
+    bom:
+      R0402-10K: 40
+      C0402-100N: 44
+      LED0603-GRN: 6
+      SOT23-NMOS: 6
+      SOIC8-OPAMP: 4
+      QFN24-SENSOR: 2
+      JST-CONN: 2
+  POWER-BOARD-C:       # shares only 2 part numbers with A
+    reflow_peak_c: 250
+    bom:
+      C0402-100N: 30
+      C0805-10U: 24
+      R0805-1R: 16
+      C1206-47U: 12
+      SOT223-LDO: 4
+      DPAK-MOSFET: 6
+      INDUCTOR-4R7: 2
+      TERMINAL-2P: 2
+
+# Boards are released job by job. quantity omitted = run that product forever.
+production_plan:
+  repeat: true
+  jobs:
+    - {product: CTRL-BOARD-A,   quantity: 150}
+    - {product: SENSOR-BOARD-B, quantity: 100}
+    - {product: POWER-BOARD-C,  quantity: 100}
 
 line:
   buffer_capacity: 5   # max boards waiting on each inter-station conveyor
@@ -33,11 +67,14 @@ line:
   #                     time only. Repairs are lognormal (median + log-sigma).
   #     exponential:    mtbf_s                  constant hazard (random faults)
   #     weibull:        shape (>1), scale_s     rising hazard (wear-out)
+  #   changeover        SETUP when the first board of a new product arrives:
+  #                     reason code + time_s (pick-and-place adds per_feeder_s)
   stations:
     - name: printer
       type: printer
       cycle_time_s: 22.0
       cycle_time_sd_s: 1.0
+      changeover: {reason: STENCIL_CHANGE, time_s: 600}
       failures:
         - reason: CONVEYOR_JAM
           distribution: exponential
@@ -53,12 +90,12 @@ line:
         refill_time_s: 60           # after the operator arrives
         open_time_grace_h: 4.0      # paste works fine this long on the stencil
         open_time_loss_pct_per_h: 3.0
-      stencil:
+      stencil:                      # one stencil per product, all with these settings
         wipe_every_prints: 10
         wipe_time_s: 25
         clog_loss_pct_per_print: 0.8     # transfer lost per print since last wipe
         wear_loss_pct_per_1k_cycles: 0.3 # permanent drift over stencil life
-        initial_cycles: 20000            # stencil is not new: -6 % already
+        initial_cycles: 20000            # stencils are not new: -6 % already
       print_quality:
         nominal_volume_pct: 104.0   # new stencil, fresh paste, just wiped
         board_volume_sd_pct: 2.5    # board-to-board noise
@@ -69,6 +106,7 @@ line:
       type: spi
       cycle_time_s: 20.0
       cycle_time_sd_s: 0.5
+      changeover: {reason: PROGRAM_LOAD, time_s: 120}
       failures:
         - reason: VISION_FAULT
           distribution: exponential
@@ -79,8 +117,9 @@ line:
     - name: pnp
       type: pnp
       board_handling_s: 8.0          # transfer in/out + fiducial alignment
-      time_per_component_s: 0.25     # 8 + 0.25 * 120 = 38 s/board -> bottleneck
+      time_per_component_s: 0.25     # e.g. 8 + 0.25 * 120 = 38 s/board -> bottleneck
       cycle_time_sd_s: 1.5
+      changeover: {reason: FEEDER_CHANGE, time_s: 300, per_feeder_s: 90}
       failures:
         - reason: CONVEYOR_JAM
           distribution: exponential
@@ -105,24 +144,35 @@ line:
         clog_detect_consecutive_fails: 3   # vision stops the machine after this
         clean_time_s: 90
       feeders:
+        slot_count: 12              # A+B together fit; switching to C swaps feeders out
         low_reel_warning_boards: 15 # call operator when < 15 boards of parts left
         splice_miss_probability: 0.1
         reel_change_time_s: 120     # load a new reel after running empty
-        slots:                      # initial_qty staggered so reels don't all run out together
-          - {slot: 1, part: R0402-10K,    reel_qty: 10000, initial_qty: 6000, mispick_rate: 0.0005}
-          - {slot: 2, part: C0402-100N,   reel_qty: 10000, initial_qty: 9000, mispick_rate: 0.0005}
-          - {slot: 3, part: C0805-10U,    reel_qty: 4000,  initial_qty: 3000, mispick_rate: 0.0003}
-          - {slot: 4, part: LED0603-GRN,  reel_qty: 4000,  initial_qty: 2500, mispick_rate: 0.0003}
-          - {slot: 5, part: SOT23-NMOS,   reel_qty: 3000,                     mispick_rate: 0.0003}
-          - {slot: 6, part: SOIC8-EEPROM, reel_qty: 2500,                     mispick_rate: 0.0002}
-          - {slot: 7, part: QFN32-MCU,    reel_qty: 490,   initial_qty: 300,  mispick_rate: 0.001}
-          - {slot: 8, part: USBC-CONN,    reel_qty: 500,   initial_qty: 400,  mispick_rate: 0.001}
+        parts:                      # initial_qty staggered so reels don't all run out together
+          R0402-10K:    {reel_qty: 10000, initial_qty: 6000, mispick_rate: 0.0005}
+          C0402-100N:   {reel_qty: 10000, initial_qty: 9000, mispick_rate: 0.0005}
+          C0805-10U:    {reel_qty: 4000,  initial_qty: 3000, mispick_rate: 0.0003}
+          LED0603-GRN:  {reel_qty: 4000,  initial_qty: 2500, mispick_rate: 0.0003}
+          SOT23-NMOS:   {reel_qty: 3000,                     mispick_rate: 0.0003}
+          SOIC8-EEPROM: {reel_qty: 2500,                     mispick_rate: 0.0002}
+          QFN32-MCU:    {reel_qty: 490,   initial_qty: 300,  mispick_rate: 0.001}
+          USBC-CONN:    {reel_qty: 500,   initial_qty: 400,  mispick_rate: 0.001}
+          SOIC8-OPAMP:  {reel_qty: 2500,                     mispick_rate: 0.0002}
+          QFN24-SENSOR: {reel_qty: 490,                      mispick_rate: 0.001}
+          JST-CONN:     {reel_qty: 1000,                     mispick_rate: 0.001}
+          R0805-1R:     {reel_qty: 4000,                     mispick_rate: 0.0003}
+          C1206-47U:    {reel_qty: 3000,                     mispick_rate: 0.0003}
+          SOT223-LDO:   {reel_qty: 1000,                     mispick_rate: 0.0005}
+          DPAK-MOSFET:  {reel_qty: 800,                      mispick_rate: 0.0008}
+          INDUCTOR-4R7: {reel_qty: 500,                      mispick_rate: 0.001}
+          TERMINAL-2P:  {reel_qty: 300,                      mispick_rate: 0.001}
 
     - name: reflow
       type: reflow
       transit_time_s: 300.0          # time for a board to cross the oven
       conveyor_length_mm: 4000.0
       board_pitch_mm: 250.0          # min spacing -> 16 boards max, 1 entry / 18.75 s
+      changeover: {reason: PROFILE_CHANGE, time_s: 600}   # zones settle at new temps
       failures:
         - reason: HEATER_FAULT
           distribution: exponential
@@ -134,6 +184,7 @@ line:
       type: aoi
       cycle_time_s: 25.0
       cycle_time_sd_s: 0.8
+      changeover: {reason: PROGRAM_LOAD, time_s: 120}
       failures:
         - reason: VISION_FAULT
           distribution: exponential
@@ -145,6 +196,7 @@ line:
       type: ict
       cycle_time_s: 30.0
       cycle_time_sd_s: 1.0
+      changeover: {reason: FIXTURE_CHANGE, time_s: 900}
       failures:
         - reason: FIXTURE_FAULT
           distribution: exponential

@@ -21,6 +21,11 @@ Reels and the operator:
   - If the reel runs empty first: STARVED_MATERIAL / FEEDER_EMPTY until the
     operator arrives, plus the time to load a new reel.
 
+Changeover: the machine has a fixed number of feeder slots. A new product's
+parts that are not mounted yet are swapped in, replacing feeders the new
+product does not use. Changeover time = fixed part + time per feeder swapped,
+so two products that share many parts change over quickly.
+
 Simplification: all picks for a board happen at the moment it starts, then
 the cycle time runs. If a reel empties part-way, the board waits in the
 machine and the remaining picks happen after the reel change.
@@ -43,11 +48,13 @@ class PickAndPlace(Station):
         self.clean_time_s = float(nozzle_cfg["clean_time_s"]) if nozzle_cfg else 0.0
 
         feeder_cfg = self.params.get("feeders")
-        self.feeders: dict[str, Feeder] = {}   # part number -> feeder
+        # Every feeder this machine has used, mounted or parked: part number -> feeder.
+        self.feeders: dict[str, Feeder] = {}
+        self.parts_cfg: dict[str, dict[str, Any]] = {}
+        self.slots: list[str | None] = []   # part number mounted in each slot
         if feeder_cfg:
-            for slot_cfg in feeder_cfg["slots"]:
-                feeder = Feeder(slot_cfg)
-                self.feeders[feeder.part_number] = feeder
+            self.parts_cfg = feeder_cfg["parts"]
+            self.slots = [None] * int(feeder_cfg["slot_count"])
             self.low_reel_warning_boards = int(feeder_cfg["low_reel_warning_boards"])
             self.splice_miss_probability = float(feeder_cfg["splice_miss_probability"])
             self.reel_change_time_s = float(feeder_cfg["reel_change_time_s"])
@@ -64,6 +71,40 @@ class PickAndPlace(Station):
         handling_s = self.params["board_handling_s"]
         per_part_s = self.params["time_per_component_s"]
         return handling_s + per_part_s * board.component_count
+
+    # ---- changeover ---------------------------------------------------------
+
+    def _setup_for(self, board: Board) -> float:
+        """Mount the feeders this product needs. Time = fixed + per feeder swapped."""
+        cfg = self.params.get("changeover", {})
+        fixed_s = float(cfg.get("time_s", 0.0))
+        if not self.slots:
+            return fixed_s
+        needed = list(board.bom)
+        if len(needed) > len(self.slots):
+            raise ValueError(f"{board.product} needs {len(needed)} feeders but {self.name} has {len(self.slots)} slots")
+
+        missing = [part for part in needed if part not in self.slots]
+        for part in missing:
+            slot = self._slot_to_use(needed)
+            if self.slots[slot] is not None:
+                self.feeders[self.slots[slot]].unmount()
+            feeder = self.feeders.get(part)
+            if feeder is None:
+                feeder = self.feeders[part] = Feeder(part, self.parts_cfg[part])
+            feeder.slot = slot + 1   # slots are numbered from 1 on the machine
+            self.slots[slot] = part
+        return fixed_s + float(cfg.get("per_feeder_s", 0.0)) * len(missing)
+
+    def _slot_to_use(self, needed: list[str]) -> int:
+        """An empty slot if there is one, else the first slot holding an unneeded part."""
+        for i, part in enumerate(self.slots):
+            if part is None:
+                return i
+        for i, part in enumerate(self.slots):
+            if part not in needed:
+                return i
+        raise RuntimeError("no free feeder slot")   # ruled out by the size check above
 
     # ---- per-board picking --------------------------------------------------
 
@@ -118,10 +159,10 @@ class PickAndPlace(Station):
         return True
 
     def _feeder_for(self, part: str) -> Feeder:
-        try:
-            return self.feeders[part]
-        except KeyError:
-            raise KeyError(f"{self.name}: no feeder loaded with part {part!r}") from None
+        feeder = self.feeders.get(part)
+        if feeder is None or feeder.slot is None:
+            raise KeyError(f"{self.name}: no feeder mounted with part {part!r}")
+        return feeder
 
     # ---- reels and operator -------------------------------------------------
 
@@ -151,6 +192,9 @@ class PickAndPlace(Station):
     def extra_tags(self) -> dict[str, Any]:
         # Only what the real machine knows: reel counts and failed picks.
         # Whether a nozzle is actually clogged is hidden ground truth.
-        tags: dict[str, Any] = {f"slot{f.slot}_qty": f.qty for f in self.feeders.values()}
+        tags: dict[str, Any] = {}
+        for i, part in enumerate(self.slots, start=1):
+            tags[f"slot{i}_part"] = part or ""
+            tags[f"slot{i}_qty"] = self.feeders[part].qty if part else 0
         tags["mispick_count"] = self.mispick_count
         return tags

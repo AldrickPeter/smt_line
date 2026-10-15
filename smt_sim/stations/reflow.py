@@ -9,6 +9,10 @@ cross it. Boards must be spaced at least `board_pitch_mm` apart, so:
 The entry interval is the oven's effective cycle time: it can accept one new
 board every `entry_interval_s`, no matter how long each board stays inside.
 
+Changeover: a new product needs a new temperature profile. The oven first
+lets the old product's boards run out, then goes SETUP while the zones
+settle at the new temperatures, then accepts the new product.
+
 Simplification: if the board at the exit cannot leave (output buffer full), the
 whole conveyor halts. A real oven cannot stop its belt without overbaking the
 boards; that consequence can be modeled later as a solder-defect cause.
@@ -57,10 +61,17 @@ class ReflowOven(Station):
             self._finish_board(self.conveyor.popleft().board)
 
         # 2. Load a new board if there is room and enough spacing.
+        next_board = None if self.input_buffer.is_empty() else self.input_buffer.peek()
+        if next_board is not None and next_board.product != self.current_product:
+            if self.current_product is None or not self.conveyor:
+                if self._change_over_if_needed(next_board, dt_s):
+                    return
+            else:
+                next_board = None   # new product waits until the old one has left the oven
         can_load = (
-            len(self.conveyor) < self.capacity
+            next_board is not None
+            and len(self.conveyor) < self.capacity
             and self._since_last_entry_s >= self.entry_interval_s
-            and not self.input_buffer.is_empty()
         )
         if can_load:
             board = self.input_buffer.pop()

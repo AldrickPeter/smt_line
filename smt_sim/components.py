@@ -103,11 +103,16 @@ class Stencil:
 
 
 class Feeder:
-    """One feeder slot holding a reel of a single part number."""
+    """A feeder holding a reel of a single part number.
 
-    def __init__(self, cfg: dict[str, Any]) -> None:
-        self.slot = int(cfg["slot"])
-        self.part_number: str = cfg["part"]
+    It is mounted in a machine slot, or parked (slot None) after a changeover
+    removed it. A parked feeder keeps its partly used reel, so mounting it
+    again later brings back the same quantity.
+    """
+
+    def __init__(self, part_number: str, cfg: dict[str, Any]) -> None:
+        self.slot: int | None = None
+        self.part_number = part_number
         self.reel_qty = int(cfg["reel_qty"])
         self.qty = int(cfg.get("initial_qty", self.reel_qty))
         self.mispick_rate = float(cfg["mispick_rate"])
@@ -126,6 +131,11 @@ class Feeder:
         """Replace an empty reel (machine was stopped)."""
         self.qty = self.reel_qty
         self.reels_loaded += 1
+        self._clear_call()
+
+    def unmount(self) -> None:
+        """Take the feeder off the machine. A pending splice call is cancelled."""
+        self.slot = None
         self._clear_call()
 
     def _clear_call(self) -> None:

@@ -43,6 +43,13 @@ class ReasonCode:
     HEAD_SERVO_FAULT = "HEAD_SERVO_FAULT"    # pick-and-place head drive wear-out
     HEATER_FAULT = "HEATER_FAULT"            # reflow zone heater / thermocouple
     FIXTURE_FAULT = "FIXTURE_FAULT"          # ICT bed-of-nails contact problem
+    # Changeovers (SETUP state)
+    STENCIL_CHANGE = "STENCIL_CHANGE"
+    PROGRAM_LOAD = "PROGRAM_LOAD"            # SPI / AOI inspection program
+    FEEDER_CHANGE = "FEEDER_CHANGE"
+    PROFILE_CHANGE = "PROFILE_CHANGE"        # reflow profile + thermal settling
+    FIXTURE_CHANGE = "FIXTURE_CHANGE"        # ICT bed-of-nails fixture
+    CHANGEOVER = "CHANGEOVER"                # generic, when config names none
     MANUAL_STOP = "MANUAL_STOP"    # injected by a test or scenario
 
 

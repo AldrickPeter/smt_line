@@ -11,7 +11,6 @@ import math
 import pytest
 
 from smt_sim import Simulator
-from smt_sim.config import load_config, make_deterministic
 from smt_sim.events import ReasonCode, StationState
 from smt_sim.metrics import (
     downtime_pareto,
@@ -23,24 +22,7 @@ from smt_sim.metrics import (
     time_in_state,
 )
 
-
-def deterministic_sim() -> Simulator:
-    """The default line with jitter and failures switched off."""
-    return Simulator(make_deterministic(load_config()))
-
-
-def tiny_config(cycle_times_s: dict[str, float], buffer_capacity: int = 1) -> dict:
-    """A line of fixed-cycle stations, in the given order."""
-    return {
-        "sim": {"tick_s": 0.5, "seed": 1},
-        "product": {"name": "TEST", "bom": {}},
-        "line": {
-            "buffer_capacity": buffer_capacity,
-            "stations": [
-                {"name": name, "type": "generic", "cycle_time_s": c} for name, c in cycle_times_s.items()
-            ],
-        },
-    }
+from helpers import deterministic_sim, tiny_config
 
 
 def test_single_station_with_one_stop():
@@ -108,7 +90,7 @@ def test_two_stations_starved_and_blocked():
     assert m["B"].performance == pytest.approx(0.9)
 
     line = line_oee(sim)
-    assert line.bottleneck_ideal_cycle_s == 20.0
+    assert line.bottleneck_ideal_cycle_s == {"TEST": 20.0}
     assert line.oee == pytest.approx(9 * 20 / 210.5)
 
     bn = find_bottleneck(sim)

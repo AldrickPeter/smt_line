@@ -8,7 +8,8 @@ Each tick a station does at most these things, in order:
   3. Before taking a new board, give the station a chance to stop
      (`_before_next_board`: e.g. stencil wipe, paste low).
   4. If it is empty, pull the next board from the input buffer
-     (or go STARVED if there is none).
+     (or go STARVED if there is none). If that board is a different product
+     than the station is set up for, change over first (SETUP).
   5. Prepare the board (`_prepare_board`: e.g. print paste, pick parts).
      This may stop the station part-way (e.g. a reel runs empty); the board
      stays in the station and preparation resumes after the stop.
@@ -17,20 +18,25 @@ Each tick a station does at most these things, in order:
      from the next tick for a random repair time.
 
 Steps 3 and 5 are hooks that do nothing here; the printer and pick-and-place
-override them.
+override them. `_setup_for` is the changeover hook (swap stencil, feeders...).
+
+Changeovers happen per station, when the first board of the new product
+reaches it. So a product change ripples down the line: the printer changes
+over first while downstream stations finish the old product.
 
 Timing note: a board's cycle starts on the tick it is pulled and finishes once
 `dt` has been subtracted enough times, so cycle times are effectively rounded
 up to a whole number of ticks. With the default 0.5 s tick this error is small.
 """
 
+from collections import Counter
 from typing import Any, Protocol
 
 import numpy as np
 
 from smt_sim.board import Board
 from smt_sim.components import Operator
-from smt_sim.events import Event, EventLog, StationState
+from smt_sim.events import Event, EventLog, ReasonCode, StationState
 from smt_sim.failures import FailureMode
 
 
@@ -38,6 +44,7 @@ class BoardInput(Protocol):
     """Anything a station can pull boards from (a Buffer or the BoardSource)."""
 
     def is_empty(self) -> bool: ...
+    def peek(self) -> Board: ...
     def pop(self) -> Board: ...
 
 
@@ -68,6 +75,8 @@ class Station:
         self.state = StationState.STARVED
         self.reason_code: str | None = None
         self.part_count = 0          # boards completed and handed downstream
+        self.parts_by_product: Counter[str] = Counter()
+        self.current_product: str | None = None   # what the station is set up for
 
         self.current_board: Board | None = None
         self.remaining_s = 0.0       # work left on current_board
@@ -124,6 +133,16 @@ class Station:
         """Called before pulling a board. Return True if a stop was started."""
         return False
 
+    def _setup_for(self, board: Board) -> float:
+        """Physically change over to `board`'s product; return how long it takes (s).
+
+        Base station: a fixed time from config (`changeover.time_s`), e.g. a
+        program load or fixture swap. Subclasses override to swap stencils,
+        feeders, etc.
+        """
+        cfg = self.params.get("changeover")
+        return float(cfg["time_s"]) if cfg else 0.0
+
     def _prepare_board(self, board: Board, dt_s: float) -> bool:
         """Do the station's per-board work. Return False if a stop was started
         and preparation must continue after it."""
@@ -148,6 +167,8 @@ class Station:
             if self.input_buffer.is_empty():
                 self._set_state(StationState.STARVED)
                 return
+            if self._change_over_if_needed(self.input_buffer.peek(), dt_s):
+                return
             self.current_board = self.input_buffer.pop()
             self.current_board.time_in_s[self.name] = self._time_s
             self.remaining_s = self._sample_cycle_time(self.current_board)
@@ -162,6 +183,23 @@ class Station:
         # Work on it.
         self._set_state(StationState.RUNNING)
         self.remaining_s -= dt_s
+
+    def _change_over_if_needed(self, next_board: Board, dt_s: float) -> bool:
+        """Set up for the next board's product. Returns True if that needs a SETUP stop.
+
+        The line starts already set up for the first product it sees, so the
+        very first setup is done instantly.
+        """
+        if next_board.product == self.current_product:
+            return False
+        first_setup = self.current_product is None
+        self.current_product = next_board.product
+        duration_s = self._setup_for(next_board)
+        if first_setup or duration_s <= 0:
+            return False
+        reason = self.params.get("changeover", {}).get("reason", ReasonCode.CHANGEOVER)
+        self._stop_now(StationState.SETUP, reason, duration_s, dt_s)
+        return True
 
     def _stop_now(self, state: StationState, reason_code: str, duration_s: float, dt_s: float) -> None:
         """Start a stop from inside _process: it already counts this tick."""
@@ -196,6 +234,7 @@ class Station:
         board.time_out_s[self.name] = self._time_s
         self.output_buffer.push(board)
         self.part_count += 1
+        self.parts_by_product[board.product] += 1
 
     def _set_state(self, new_state: StationState, reason_code: str | None = None) -> None:
         """Change state and log it. Repeated calls with the same state are ignored."""

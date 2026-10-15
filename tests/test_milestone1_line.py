@@ -7,12 +7,9 @@ from smt_sim.buffer import Buffer
 from smt_sim.config import load_config, make_deterministic
 from smt_sim.events import ReasonCode, StationState
 
+from helpers import deterministic_sim, single_product
+
 PNP_CYCLE_S = 8.0 + 0.25 * 120   # from config/default.yaml: 38 s, the bottleneck
-
-
-def deterministic_sim() -> Simulator:
-    """The default line with jitter and failures switched off."""
-    return Simulator(make_deterministic(load_config()))
 
 
 def boards_out_between(sim: Simulator, start_s: float, end_s: float) -> int:
@@ -59,7 +56,7 @@ def test_downstream_first_update_order_keeps_balanced_line_at_full_rate():
     This only works if a slot freed downstream is reusable upstream in the
     same tick, which is what the downstream-to-upstream order guarantees.
     """
-    cfg = make_deterministic(load_config())
+    cfg = single_product(make_deterministic(load_config()))
     cfg["line"]["buffer_capacity"] = 1
     for st in cfg["line"]["stations"]:
         if st["type"] == "pnp":

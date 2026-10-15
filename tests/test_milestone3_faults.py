@@ -11,6 +11,8 @@ from smt_sim.events import ReasonCode, StationState
 from smt_sim.failures import FailureMode
 from smt_sim.metrics import STOP_STATES, downtime_pareto, find_bottleneck, state_intervals, station_oee, time_in_state
 
+from helpers import single_product
+
 N_SAMPLES = 20_000
 
 
@@ -102,7 +104,7 @@ def test_faults_appear_with_their_reason_codes():
 
 def test_observed_mtbf_matches_config():
     """Give pnp one frequent jam mode; running time / jams ≈ configured MTBF."""
-    cfg = make_deterministic(load_config())
+    cfg = single_product(make_deterministic(load_config()))
     pnp_cfg = next(st for st in cfg["line"]["stations"] if st["name"] == "pnp")
     pnp_cfg["failures"] = [{"reason": "CONVEYOR_JAM", "distribution": "exponential",
                             "mtbf_s": 600.0, "repair_median_s": 60.0, "repair_sigma": 0.5}]
@@ -119,7 +121,7 @@ def test_observed_mtbf_matches_config():
 def test_a_station_that_never_runs_never_wears():
     cfg = {
         "sim": {"tick_s": 0.5, "seed": 1},
-        "product": {"name": "T", "bom": {}},
+        "products": {"T": {"bom": {}}},
         "line": {"buffer_capacity": 1, "stations": [{
             "name": "A", "type": "generic", "cycle_time_s": 10.0,
             "failures": [{"reason": "CONVEYOR_JAM", "distribution": "exponential",
@@ -151,7 +153,7 @@ def test_stochastic_line_still_finds_pnp_as_bottleneck():
 
 
 def test_oven_performance_is_one_and_utilization_shows_fill():
-    sim = Simulator(make_deterministic(load_config()))
+    sim = Simulator(single_product(make_deterministic(load_config())))
     sim.run(8 * 3600)
     m = station_oee(sim)["reflow"]
     assert m.performance == 1.0
@@ -160,7 +162,7 @@ def test_oven_performance_is_one_and_utilization_shows_fill():
 
 
 def test_oven_active_periods_follow_its_entrance():
-    sim = Simulator(make_deterministic(load_config()))
+    sim = Simulator(single_product(make_deterministic(load_config())))
     sim.run(8 * 3600)
     bn = find_bottleneck(sim)
     # One entry window per board, not one 8-hour "always running" period.

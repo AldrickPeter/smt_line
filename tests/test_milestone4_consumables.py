@@ -8,6 +8,8 @@ from smt_sim.components import Nozzle, SolderPaste, Stencil
 from smt_sim.config import load_config
 from smt_sim.events import ReasonCode, StationState
 
+from helpers import default_single_product
+
 
 def stops(sim: Simulator, station: str, reason: str) -> int:
     """How many times a station entered a stop with this reason."""
@@ -74,7 +76,7 @@ def test_nozzle_hazard_rises_and_clog_widens_offsets():
 
 
 def test_paste_volume_falls_with_prints_since_wipe():
-    sim = Simulator(seed=2)
+    sim = Simulator(default_single_product(), seed=2)
     sim.run(8 * 3600)
     m = printer_measurements(sim)
     x = np.array([r["prints_since_wipe"] for r in m])
@@ -84,7 +86,7 @@ def test_paste_volume_falls_with_prints_since_wipe():
 
 
 def test_wipe_happens_every_n_prints():
-    sim = Simulator(seed=2)
+    sim = Simulator(default_single_product(), seed=2)
     sim.run(8 * 3600)
     printer = sim.station("printer")
     prints = printer.stencil.cycle_count - 20000
@@ -95,7 +97,7 @@ def test_wipe_happens_every_n_prints():
 
 
 def test_paste_mass_balance_and_paste_low_stops():
-    sim = Simulator(seed=4)
+    sim = Simulator(default_single_product(), seed=4)
     sim.run(24 * 3600)
     printer = sim.station("printer")
     prints = printer.stencil.cycle_count - 20000
@@ -109,7 +111,7 @@ def test_paste_mass_balance_and_paste_low_stops():
 
 
 def test_stencil_wear_drifts_volume_down():
-    cfg = load_config()
+    cfg = default_single_product()
     stencil = station_cfg(cfg, "printer")["stencil"]
     stencil["wear_loss_pct_per_1k_cycles"] = 20.0   # accelerated wear
     stencil["initial_cycles"] = 0
@@ -130,19 +132,19 @@ def parts_placed(pnp) -> int:
 
 
 def test_every_part_taken_is_placed_or_mispicked():
-    sim = Simulator(seed=5)
+    sim = Simulator(default_single_product(), seed=5)
     sim.run(24 * 3600)
     pnp = sim.station("pnp")
-    cfg_slots = {s["part"]: s for s in station_cfg(load_config(), "pnp")["feeders"]["slots"]}
+    parts_cfg = station_cfg(load_config(), "pnp")["feeders"]["parts"]
     taken = 0
     for part, f in pnp.feeders.items():
-        initial = cfg_slots[part].get("initial_qty", f.reel_qty)
+        initial = parts_cfg[part].get("initial_qty", f.reel_qty)
         taken += initial + f.reels_loaded * f.reel_qty - f.qty
     assert taken == parts_placed(pnp) + pnp.mispick_count
 
 
 def test_fast_operator_splices_without_stopping():
-    cfg = load_config()
+    cfg = default_single_product()
     cfg["line"]["operator"] = {"response_median_s": 5, "response_sigma": 0.1}
     station_cfg(cfg, "pnp")["feeders"]["splice_miss_probability"] = 0.0
     sim = Simulator(cfg, seed=6)
@@ -152,7 +154,7 @@ def test_fast_operator_splices_without_stopping():
 
 
 def test_missed_splice_calls_cause_feeder_empty_stops():
-    cfg = load_config()
+    cfg = default_single_product()
     station_cfg(cfg, "pnp")["feeders"]["splice_miss_probability"] = 1.0
     sim = Simulator(cfg, seed=6)
     sim.run(24 * 3600)
@@ -168,7 +170,7 @@ def test_missed_splice_calls_cause_feeder_empty_stops():
 
 
 def test_injected_nozzle_clog_is_caught_and_leaves_traceable_offsets():
-    sim = Simulator(seed=8)
+    sim = Simulator(default_single_product(), seed=8)
     sim.run(3600)
     pnp = sim.station("pnp")
     pnp.nozzles[2].clogged = True
@@ -195,7 +197,7 @@ def test_injected_nozzle_clog_is_caught_and_leaves_traceable_offsets():
 
 
 def test_consumable_tags_are_flat_and_primitive():
-    sim = Simulator()
+    sim = Simulator(default_single_product())
     sim.run(600)
     tags = sim.get_tags()
     assert {"paste_g", "prints_since_wipe", "stencil_cycles"} <= tags["printer"].keys()

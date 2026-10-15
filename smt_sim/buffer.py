@@ -30,6 +30,10 @@ class Buffer:
             raise RuntimeError(f"Buffer {self.name} is full")
         self._boards.append(board)
 
+    def peek(self) -> Board:
+        """The board that pop() would return, without removing it."""
+        return self._boards[0]
+
     def pop(self) -> Board:
         return self._boards.popleft()
 

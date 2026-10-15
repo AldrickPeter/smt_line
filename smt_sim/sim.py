@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from smt_sim.board import Board, BoardSource
+from smt_sim.board import Board, ProductionPlan
 from smt_sim.buffer import Buffer
 from smt_sim.components import Operator
 from smt_sim.config import load_config
@@ -43,8 +43,11 @@ class Simulator:
         self.time_s = 0.0
         self.event_log = EventLog()
 
-        product = config["product"]
-        self.source = BoardSource(product["name"], product["bom"])
+        self.products: dict[str, dict[str, Any]] = config["products"]
+        # Without a plan, run the first product forever.
+        first_product = next(iter(self.products))
+        plan_cfg = config.get("production_plan") or {"jobs": [{"product": first_product}]}
+        self.source = ProductionPlan(plan_cfg, self.products)
         self.sink = Buffer("sink", capacity=None)   # finished boards collect here
 
         self.stations: list[Station] = []
@@ -97,14 +100,18 @@ class Simulator:
                 return st
         raise KeyError(name)
 
-    def ideal_cycle_time_s(self, station_name: str) -> float:
-        """Ideal cycle time of a station for the configured product.
+    def ideal_cycle_time_s(self, station_name: str, product: str) -> float:
+        """Ideal cycle time of a station for one product.
 
         Uses a throwaway reference board so stations whose cycle time depends
         on the board (pick-and-place: component count) answer correctly.
         """
-        reference = Board("REFERENCE", self.source.product, self.source.bom)
+        reference = Board("REFERENCE", product, self.products[product])
         return self.station(station_name).cycle_time_for(reference)
+
+    def bottleneck_ideal_cycle_s(self, product: str) -> float:
+        """The slowest station's ideal cycle for this product = the line's ideal pace."""
+        return max(self.ideal_cycle_time_s(st.name, product) for st in self.stations)
 
     def all_boards(self) -> list[Board]:
         """Every board started so far: finished, waiting in buffers, or inside a station."""

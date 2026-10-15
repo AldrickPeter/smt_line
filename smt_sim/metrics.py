@@ -11,7 +11,7 @@ from t0 to t1". Every metric below is a sum or grouping over those intervals.
 from __future__ import annotations
 
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -77,8 +77,8 @@ class StationOEE:
     starved_s: float
     blocked_s: float
     boards_processed: int
-    ideal_cycle_s: float
-    utilization: float   # ideal cycle × boards / planned: share of capacity actually used
+    ideal_work_s: float  # Σ boards × ideal cycle of their product
+    utilization: float   # ideal work / planned: share of capacity actually used
     availability: float
     performance: float
     quality: float
@@ -97,11 +97,15 @@ def station_oee(sim: Simulator) -> dict[str, StationOEE]:
     availability  = running / (planned − starved − blocked)
                     Starved/blocked are caused by neighbours, so they are
                     removed from the denominator and reported separately.
-    performance   = ideal cycle × boards processed / running
+    performance   = ideal work / running
     quality       = 1.0 until inspection exists (milestone 5)
-    utilization   = ideal cycle × boards processed / planned
+    utilization   = ideal work / planned
                     How much of the station's capacity was used. Not part of
                     OEE; low utilization on a non-bottleneck is normal.
+
+    ideal work = Σ over products of (boards of that product × its ideal
+    cycle), because each product takes a different time (e.g. fewer parts
+    to place).
 
     Pipeline stations (the reflow oven) are RUNNING whenever any board is
     inside. Their belt moves at a fixed speed, so they cannot lose speed:
@@ -116,13 +120,14 @@ def station_oee(sim: Simulator) -> dict[str, StationOEE]:
         running_s = t[StationState.RUNNING]
         starved_s = t[StationState.STARVED]
         blocked_s = t[StationState.BLOCKED]
-        ideal_cycle_s = sim.ideal_cycle_time_s(st.name)
+        ideal_work_s = sum(n * sim.ideal_cycle_time_s(st.name, product)
+                           for product, n in st.parts_by_product.items())
 
         availability = _ratio(running_s, planned_s - starved_s - blocked_s)
         if st.is_pipeline:
             performance = 1.0
         else:
-            performance = _ratio(ideal_cycle_s * st.part_count, running_s)
+            performance = _ratio(ideal_work_s, running_s)
         quality = 1.0
         result[st.name] = StationOEE(
             planned_s=planned_s,
@@ -130,8 +135,8 @@ def station_oee(sim: Simulator) -> dict[str, StationOEE]:
             starved_s=starved_s,
             blocked_s=blocked_s,
             boards_processed=st.part_count,
-            ideal_cycle_s=ideal_cycle_s,
-            utilization=_ratio(ideal_cycle_s * st.part_count, planned_s),
+            ideal_work_s=ideal_work_s,
+            utilization=_ratio(ideal_work_s, planned_s),
             availability=availability,
             performance=performance,
             quality=quality,
@@ -144,27 +149,27 @@ def station_oee(sim: Simulator) -> dict[str, StationOEE]:
 class LineOEE:
     planned_s: float
     boards_out: int
-    bottleneck_ideal_cycle_s: float
+    bottleneck_ideal_cycle_s: dict[str, float]   # per product
     oee: float
 
 
 def line_oee(sim: Simulator) -> LineOEE:
     """Line OEE measured at the end of the line.
 
-    OEE = good boards out × bottleneck ideal cycle / planned time
+    OEE = Σ (good boards of product p × bottleneck ideal cycle of p) / planned time
 
-    i.e. actual good output divided by what the line could make if the
-    slowest station ran at its ideal speed the whole time. All boards count as
-    good until defects exist (milestone 5).
+    i.e. actual good output, valued at the line's ideal pace for each product,
+    divided by the time available. All boards count as good until defects
+    exist (milestone 5).
     """
-    bottleneck_cycle_s = max(sim.ideal_cycle_time_s(st.name) for st in sim.stations)
-    planned_s = sim.time_s
-    good_boards = sim.boards_completed
+    out_by_product = Counter(b.product for b in sim.sink.boards())
+    bottleneck_s = {p: sim.bottleneck_ideal_cycle_s(p) for p in sim.products}
+    ideal_output_s = sum(n * bottleneck_s[p] for p, n in out_by_product.items())
     return LineOEE(
-        planned_s=planned_s,
-        boards_out=good_boards,
-        bottleneck_ideal_cycle_s=bottleneck_cycle_s,
-        oee=_ratio(good_boards * bottleneck_cycle_s, planned_s),
+        planned_s=sim.time_s,
+        boards_out=sum(out_by_product.values()),
+        bottleneck_ideal_cycle_s=bottleneck_s,
+        oee=_ratio(ideal_output_s, sim.time_s),
     )
 
 
@@ -292,10 +297,9 @@ def format_report(sim: Simulator) -> str:
     """Human-readable summary of all metrics (used by the headless script)."""
     lines = []
     line = line_oee(sim)
-    lines.append(
-        f"Line OEE {line.oee:6.1%}   boards out {line.boards_out}   "
-        f"bottleneck ideal cycle {line.bottleneck_ideal_cycle_s:g} s   time {line.planned_s:g} s"
-    )
+    cycles = ", ".join(f"{p} {s:g} s" for p, s in line.bottleneck_ideal_cycle_s.items())
+    lines.append(f"Line OEE {line.oee:6.1%}   boards out {line.boards_out}   time {line.planned_s:g} s")
+    lines.append(f"  bottleneck ideal cycle per product: {cycles}")
     lines.append("")
     lines.append(f"{'station':10s} {'running':>8s} {'starved':>8s} {'blocked':>8s}"
                  f" {'avail':>7s} {'perf':>7s} {'OEE':>7s} {'util':>7s} {'boards':>7s}")

@@ -10,6 +10,9 @@ The board stores the resulting volume AND the cause values behind it, so a
 defect found later can be traced back to "printed 9 prints after a wipe with
 5 h old paste".
 
+Each product has its own stencil. A changeover swaps the stencil (each one
+keeps its own wear and clogging); the paste stays on the machine.
+
 Stops:
   - wipe due (every N prints): DOWN / STENCIL_WIPE. It is a planned, short
     stop, but it is logged as DOWN so it counts against availability and
@@ -31,12 +34,21 @@ class StencilPrinter(Station):
         super().__init__(*args, **kwargs)
         # Consumable models are optional so a deterministic test line can omit them.
         self.paste = SolderPaste(self.params["paste"], self.rng) if "paste" in self.params else None
-        self.stencil = Stencil(self.params["stencil"]) if "stencil" in self.params else None
+        self.stencil_cfg = self.params.get("stencil")
+        self.stencils: dict[str, Stencil] = {}   # product -> its stencil
+        self.stencil: Stencil | None = None      # the one mounted now (set at first setup)
         quality = self.params.get("print_quality", {})
         self.nominal_volume_pct = float(quality.get("nominal_volume_pct", 100.0))
         self.board_volume_sd_pct = float(quality.get("board_volume_sd_pct", 0.0))
         self.pad_volume_sd_pct = float(quality.get("pad_volume_sd_pct", 0.0))
         self.pads_per_board = int(quality.get("pads_per_board", 1))
+
+    def _setup_for(self, board: Board) -> float:
+        if self.stencil_cfg is not None:
+            if board.product not in self.stencils:
+                self.stencils[board.product] = Stencil(self.stencil_cfg)
+            self.stencil = self.stencils[board.product]
+        return super()._setup_for(board)
 
     def _before_next_board(self, dt_s: float) -> bool:
         if self.stencil is not None and self.stencil.wipe_due():
