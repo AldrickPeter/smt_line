@@ -1,14 +1,23 @@
 """Base station: a single-board server with a small state machine.
 
 Each tick a station does at most these things, in order:
-  1. If it is DOWN, count down the repair time and do nothing else.
+  1. If it is stopped (DOWN, STARVED_MATERIAL, ...), count down the stop
+     time and do nothing else.
   2. If it holds a finished board, push it to the output buffer
      (or go BLOCKED if the buffer is full).
-  3. If it is empty, pull the next board from the input buffer
+  3. Before taking a new board, give the station a chance to stop
+     (`_before_next_board`: e.g. stencil wipe, paste low).
+  4. If it is empty, pull the next board from the input buffer
      (or go STARVED if there is none).
-  4. Work on the current board for one tick (RUNNING).
-  5. If it ran this tick, age its failure modes; a failure takes it DOWN
+  5. Prepare the board (`_prepare_board`: e.g. print paste, pick parts).
+     This may stop the station part-way (e.g. a reel runs empty); the board
+     stays in the station and preparation resumes after the stop.
+  6. Work on the current board for one tick (RUNNING).
+  7. If it ran this tick, age its failure modes; a failure takes it DOWN
      from the next tick for a random repair time.
+
+Steps 3 and 5 are hooks that do nothing here; the printer and pick-and-place
+override them.
 
 Timing note: a board's cycle starts on the tick it is pulled and finishes once
 `dt` has been subtracted enough times, so cycle times are effectively rounded
@@ -20,6 +29,7 @@ from typing import Any, Protocol
 import numpy as np
 
 from smt_sim.board import Board
+from smt_sim.components import Operator
 from smt_sim.events import Event, EventLog, StationState
 from smt_sim.failures import FailureMode
 
@@ -44,6 +54,7 @@ class Station:
         output_buffer: Any,          # a Buffer
         event_log: EventLog,
         rng: np.random.Generator,
+        operator: Operator | None = None,
     ) -> None:
         self.name = name
         self.params = params
@@ -51,6 +62,7 @@ class Station:
         self.output_buffer = output_buffer
         self.event_log = event_log
         self.rng = rng   # the run's single shared generator
+        self.operator = operator
         self.failure_modes = [FailureMode(f, rng) for f in params.get("failures", [])]
 
         self.state = StationState.STARVED
@@ -59,9 +71,12 @@ class Station:
 
         self.current_board: Board | None = None
         self.remaining_s = 0.0       # work left on current_board
+        self._board_prepared = False
 
-        self._down_remaining_s = 0.0
-        self._down_reason: str | None = None
+        # An active stop: which state to show, why, and for how much longer.
+        self._stop_state = StationState.DOWN
+        self._stop_reason: str | None = None
+        self._stop_remaining_s = 0.0
 
         # Clock of the tick being processed, so _set_state can timestamp events.
         self._tick = 0
@@ -76,31 +91,49 @@ class Station:
         return float(self.params["cycle_time_s"])
 
     def force_down(self, reason_code: str, duration_s: float) -> None:
-        """Stop the station for `duration_s`. Used by tests and scenario hooks.
-
-        A board being worked on stays in the station and resumes afterwards.
+        """Stop the station (DOWN) from the next tick. Used by failures, tests
+        and scenario hooks. A board being worked on stays and resumes afterwards.
         """
-        self._down_remaining_s = duration_s
-        self._down_reason = reason_code
+        self._stop_state = StationState.DOWN
+        self._stop_reason = reason_code
+        self._stop_remaining_s = duration_s
+
+    def boards_inside(self) -> list[Board]:
+        """Boards currently held by this station."""
+        return [self.current_board] if self.current_board is not None else []
+
+    def extra_tags(self) -> dict[str, Any]:
+        """Station-specific tags for Simulator.get_tags(). Flat and primitive."""
+        return {}
 
     def step(self, tick: int, time_s: float, dt_s: float) -> None:
         """Advance this station by one tick."""
         self._tick, self._time_s = tick, time_s
 
-        if self._down_remaining_s > 0:
-            self._set_state(StationState.DOWN, self._down_reason)
-            self._down_remaining_s -= dt_s
+        if self._stop_remaining_s > 0:
+            self._count_down_stop(dt_s)
             return
 
         self._process(dt_s)
         if self.state == StationState.RUNNING:
             self._age_failure_modes(dt_s)
 
+    # ---- hooks for subclasses ---------------------------------------------
+
+    def _before_next_board(self, dt_s: float) -> bool:
+        """Called before pulling a board. Return True if a stop was started."""
+        return False
+
+    def _prepare_board(self, board: Board, dt_s: float) -> bool:
+        """Do the station's per-board work. Return False if a stop was started
+        and preparation must continue after it."""
+        return True
+
     # ---- internals --------------------------------------------------------
 
     def _process(self, dt_s: float) -> None:
-        """Single-board server logic: push finished, pull next, work."""
-        # 1. Hand off a finished board.
+        """Single-board server logic: push finished, pull next, prepare, work."""
+        # Hand off a finished board.
         if self.current_board is not None and self.remaining_s <= 0:
             if not self.output_buffer.has_space():
                 self._set_state(StationState.BLOCKED)
@@ -108,18 +141,38 @@ class Station:
             self._finish_board(self.current_board)
             self.current_board = None
 
-        # 2. Pull the next board.
+        # Pull the next board.
         if self.current_board is None:
+            if self._before_next_board(dt_s):
+                return
             if self.input_buffer.is_empty():
                 self._set_state(StationState.STARVED)
                 return
             self.current_board = self.input_buffer.pop()
             self.current_board.time_in_s[self.name] = self._time_s
             self.remaining_s = self._sample_cycle_time(self.current_board)
+            self._board_prepared = False
 
-        # 3. Work on it.
+        # Station-specific per-board work (may stop part-way).
+        if not self._board_prepared:
+            if not self._prepare_board(self.current_board, dt_s):
+                return
+            self._board_prepared = True
+
+        # Work on it.
         self._set_state(StationState.RUNNING)
         self.remaining_s -= dt_s
+
+    def _stop_now(self, state: StationState, reason_code: str, duration_s: float, dt_s: float) -> None:
+        """Start a stop from inside _process: it already counts this tick."""
+        self._stop_state = state
+        self._stop_reason = reason_code
+        self._stop_remaining_s = duration_s
+        self._count_down_stop(dt_s)
+
+    def _count_down_stop(self, dt_s: float) -> None:
+        self._set_state(self._stop_state, self._stop_reason)
+        self._stop_remaining_s -= dt_s
 
     def _sample_cycle_time(self, board: Board) -> float:
         """Actual time for this board: ideal plus normal jitter.

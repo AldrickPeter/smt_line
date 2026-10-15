@@ -79,7 +79,7 @@ def test_reflow_is_a_pipeline_with_fixed_transit_time():
     oven = sim.station("reflow")
     assert oven.capacity == 16
     assert len(oven.conveyor) > 1   # several boards inside at once
-    finished = [b for b in sim.sink._boards if "reflow" in b.time_out_s]
+    finished = [b for b in sim.sink.boards() if "reflow" in b.time_out_s]
     transits = {b.time_out_s["reflow"] - b.time_in_s["reflow"] for b in finished}
     assert transits == {300.0}
 

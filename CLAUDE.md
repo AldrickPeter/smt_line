@@ -125,6 +125,7 @@ smt_sim/
 2. **Event log + metrics**: time-in-state, OEE per station and line. Test: hand-computable small case.
 3. **Stochastic faults and repairs**: exponential/Weibull failures, lognormal repairs. Test: same seed → identical log.
 4. **Consumables**: paste, stencil wipe/wear, feeders/reels/splicing, nozzles.
+4b. **Products and changeovers**: several products in config (BOM, part numbers per feeder slot), a production plan feeding the line (e.g. 50 × A then 30 × B), and per-station changeovers in `SETUP` with reason codes: printer stencil swap, SPI/AOI program load, pick-and-place feeder/cart swap (time depends on how many parts differ between the two products), reflow profile change + thermal settling, ICT fixture swap. Each station changes over when the first board of the new product reaches it, so the changeover ripples down the line. Test: changeover time appears as SETUP in the right order per station; a product pair sharing more parts changes over faster.
 5. **Boards and defects**: measurements, true vs detected defects, AOI/ICT detection, FPY, attribution.
 6. **Pygame view**: stations colored by state, buffer fill, counts, live OEE, speed control.
 7. **Scenarios**: stencil wear, feeder depletion, injected nozzle fault. Test: metrics point to the correct root cause.

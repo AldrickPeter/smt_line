@@ -45,6 +45,9 @@ class ReflowOven(Station):
     def cycle_time_for(self, board: Board) -> float:
         return self.entry_interval_s
 
+    def boards_inside(self) -> list[Board]:
+        return [item.board for item in self.conveyor]
+
     def _process(self, dt_s: float) -> None:
         # 1. Board at the exit leaves, or the conveyor halts.
         if self.conveyor and self.conveyor[0].remaining_s <= 0:

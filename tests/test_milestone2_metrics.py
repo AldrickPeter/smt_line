@@ -33,7 +33,7 @@ def tiny_config(cycle_times_s: dict[str, float], buffer_capacity: int = 1) -> di
     """A line of fixed-cycle stations, in the given order."""
     return {
         "sim": {"tick_s": 0.5, "seed": 1},
-        "product": {"name": "TEST", "component_count": 0},
+        "product": {"name": "TEST", "bom": {}},
         "line": {
             "buffer_capacity": buffer_capacity,
             "stations": [

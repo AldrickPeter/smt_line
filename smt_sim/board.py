@@ -1,19 +1,27 @@
 """The board record that travels down the line.
 
-Milestone 1 only tracks identity and per-station timestamps. Measurements,
-true defects and detected defects are added in milestone 5.
+Milestone 4 adds `measurements`: what each station physically did to the
+board (paste volume, placement offsets), plus the state of the cause behind
+it (prints since wipe, nozzle id). Milestone 5 turns these into true and
+detected defects.
 """
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
 class Board:
     serial: str
     product: str
-    component_count: int
+    bom: dict[str, int]   # part number -> quantity per board (shared, not copied)
     time_in_s: dict[str, float] = field(default_factory=dict)   # station name -> sim time entered
     time_out_s: dict[str, float] = field(default_factory=dict)  # station name -> sim time left
+    measurements: dict[str, dict[str, Any]] = field(default_factory=dict)  # station name -> values
+
+    @property
+    def component_count(self) -> int:
+        return sum(self.bom.values())
 
 
 class BoardSource:
@@ -23,9 +31,9 @@ class BoardSource:
     printer can treat it exactly like any other input buffer.
     """
 
-    def __init__(self, product: str, component_count: int) -> None:
+    def __init__(self, product: str, bom: dict[str, int]) -> None:
         self.product = product
-        self.component_count = component_count
+        self.bom = bom
         self.boards_created = 0
 
     def is_empty(self) -> bool:
@@ -33,8 +41,4 @@ class BoardSource:
 
     def pop(self) -> Board:
         self.boards_created += 1
-        return Board(
-            serial=f"SN{self.boards_created:06d}",
-            product=self.product,
-            component_count=self.component_count,
-        )
+        return Board(serial=f"SN{self.boards_created:06d}", product=self.product, bom=self.bom)

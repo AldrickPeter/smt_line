@@ -7,10 +7,22 @@ sim:
 
 product:
   name: CTRL-BOARD-A
-  component_count: 120 # parts placed per board (drives pick-and-place cycle time)
+  bom:                 # part number -> quantity per board (120 parts in total)
+    R0402-10K: 40
+    C0402-100N: 50
+    C0805-10U: 12
+    LED0603-GRN: 8
+    SOT23-NMOS: 6
+    SOIC8-EEPROM: 2
+    QFN32-MCU: 1
+    USBC-CONN: 1
 
 line:
   buffer_capacity: 5   # max boards waiting on each inter-station conveyor
+
+  operator:            # answers machine calls (paste low, low reel)
+    response_median_s: 240
+    response_sigma: 0.7
 
   # Listed upstream -> downstream. The order here IS the line order.
   #
@@ -32,6 +44,26 @@ line:
           mtbf_s: 21600             # 6 h of running
           repair_median_s: 120
           repair_sigma: 0.5
+      paste:
+        initial_g: 400
+        per_print_mean_g: 1.2
+        per_print_sd_g: 0.1
+        low_limit_g: 150            # below this -> PASTE_LOW stop
+        refill_g: 300
+        refill_time_s: 60           # after the operator arrives
+        open_time_grace_h: 4.0      # paste works fine this long on the stencil
+        open_time_loss_pct_per_h: 3.0
+      stencil:
+        wipe_every_prints: 10
+        wipe_time_s: 25
+        clog_loss_pct_per_print: 0.8     # transfer lost per print since last wipe
+        wear_loss_pct_per_1k_cycles: 0.3 # permanent drift over stencil life
+        initial_cycles: 20000            # stencil is not new: -6 % already
+      print_quality:
+        nominal_volume_pct: 104.0   # new stencil, fresh paste, just wiped
+        board_volume_sd_pct: 2.5    # board-to-board noise
+        pad_volume_sd_pct: 6.0      # pad-to-pad noise within a board
+        pads_per_board: 400
 
     - name: spi
       type: spi
@@ -61,6 +93,30 @@ line:
           scale_s: 36000            # characteristic life 10 h of running
           repair_median_s: 1200
           repair_sigma: 0.6
+      nozzles:
+        count: 4                    # picks rotate across nozzles
+        clog_shape: 3.0             # Weibull beta, per pick since cleaning
+        clog_scale_picks: 25000     # ~9 h of picking per nozzle
+        base_offset_sd_um: 15
+        wear_offset_sd_um: 25       # added at picks_since_clean == scale
+        clog_offset_sd_um: 60       # added while clogged
+        base_pick_fail_prob: 0.0005
+        clog_pick_fail_prob: 0.30
+        clog_detect_consecutive_fails: 3   # vision stops the machine after this
+        clean_time_s: 90
+      feeders:
+        low_reel_warning_boards: 15 # call operator when < 15 boards of parts left
+        splice_miss_probability: 0.1
+        reel_change_time_s: 120     # load a new reel after running empty
+        slots:                      # initial_qty staggered so reels don't all run out together
+          - {slot: 1, part: R0402-10K,    reel_qty: 10000, initial_qty: 6000, mispick_rate: 0.0005}
+          - {slot: 2, part: C0402-100N,   reel_qty: 10000, initial_qty: 9000, mispick_rate: 0.0005}
+          - {slot: 3, part: C0805-10U,    reel_qty: 4000,  initial_qty: 3000, mispick_rate: 0.0003}
+          - {slot: 4, part: LED0603-GRN,  reel_qty: 4000,  initial_qty: 2500, mispick_rate: 0.0003}
+          - {slot: 5, part: SOT23-NMOS,   reel_qty: 3000,                     mispick_rate: 0.0003}
+          - {slot: 6, part: SOIC8-EEPROM, reel_qty: 2500,                     mispick_rate: 0.0002}
+          - {slot: 7, part: QFN32-MCU,    reel_qty: 490,   initial_qty: 300,  mispick_rate: 0.001}
+          - {slot: 8, part: USBC-CONN,    reel_qty: 500,   initial_qty: 400,  mispick_rate: 0.001}
 
     - name: reflow
       type: reflow

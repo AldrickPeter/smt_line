@@ -7,15 +7,18 @@ import numpy as np
 
 from smt_sim.board import Board, BoardSource
 from smt_sim.buffer import Buffer
+from smt_sim.components import Operator
 from smt_sim.config import load_config
 from smt_sim.events import EventLog
 from smt_sim.station import Station
 from smt_sim.stations.pnp import PickAndPlace
+from smt_sim.stations.printer import StencilPrinter
 from smt_sim.stations.reflow import ReflowOven
 
 # Station `type` in the config -> class. Types not listed use the base Station
 # (fixed cycle time) until their own behavior is added in later milestones.
 STATION_CLASSES: dict[str, type[Station]] = {
+    "printer": StencilPrinter,
     "pnp": PickAndPlace,
     "reflow": ReflowOven,
 }
@@ -41,7 +44,7 @@ class Simulator:
         self.event_log = EventLog()
 
         product = config["product"]
-        self.source = BoardSource(product["name"], product["component_count"])
+        self.source = BoardSource(product["name"], product["bom"])
         self.sink = Buffer("sink", capacity=None)   # finished boards collect here
 
         self.stations: list[Station] = []
@@ -49,6 +52,7 @@ class Simulator:
         self._build_line(config["line"])
 
     def _build_line(self, line_cfg: dict[str, Any]) -> None:
+        operator = Operator(line_cfg["operator"], self.rng) if "operator" in line_cfg else None
         station_cfgs = line_cfg["stations"]
         upstream: Any = self.source
         for i, st_cfg in enumerate(station_cfgs):
@@ -61,7 +65,7 @@ class Simulator:
                 self.buffers.append(downstream)
 
             cls = STATION_CLASSES.get(st_cfg["type"], Station)
-            station = cls(st_cfg["name"], st_cfg, upstream, downstream, self.event_log, self.rng)
+            station = cls(st_cfg["name"], st_cfg, upstream, downstream, self.event_log, self.rng, operator)
             self.stations.append(station)
             upstream = downstream
 
@@ -99,8 +103,17 @@ class Simulator:
         Uses a throwaway reference board so stations whose cycle time depends
         on the board (pick-and-place: component count) answer correctly.
         """
-        reference = Board("REFERENCE", self.source.product, self.source.component_count)
+        reference = Board("REFERENCE", self.source.product, self.source.bom)
         return self.station(station_name).cycle_time_for(reference)
+
+    def all_boards(self) -> list[Board]:
+        """Every board started so far: finished, waiting in buffers, or inside a station."""
+        boards = self.sink.boards()
+        for buf in self.buffers:
+            boards += buf.boards()
+        for st in self.stations:
+            boards += st.boards_inside()
+        return boards
 
     @property
     def boards_completed(self) -> int:
@@ -118,6 +131,7 @@ class Simulator:
                 "reason_code": st.reason_code or "",
                 "part_count": st.part_count,
                 "reject_count": 0,   # inspection arrives in milestone 5
+                **st.extra_tags(),
             }
         for buf in self.buffers:
             tags[buf.name] = {"level": len(buf), "capacity": buf.capacity}

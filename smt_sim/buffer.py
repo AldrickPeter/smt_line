@@ -33,5 +33,9 @@ class Buffer:
     def pop(self) -> Board:
         return self._boards.popleft()
 
+    def boards(self) -> list[Board]:
+        """Snapshot of the boards waiting, oldest first."""
+        return list(self._boards)
+
     def __len__(self) -> int:
         return len(self._boards)

@@ -18,12 +18,13 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
 def make_deterministic(config: dict[str, Any]) -> dict[str, Any]:
     """Copy of `config` with all randomness switched off.
 
-    No cycle-time jitter and no failures, so the line behaves exactly as
-    the hand calculations predict. Useful for tests and for checking the
-    line's ideal capacity.
+    No cycle-time jitter, no failures and no consumables (paste, stencil,
+    nozzles, feeders), so the line behaves exactly as the hand calculations
+    predict. Useful for tests and for checking the line's ideal capacity.
     """
     cfg = copy.deepcopy(config)
     for st in cfg["line"]["stations"]:
         st["cycle_time_sd_s"] = 0.0
-        st.pop("failures", None)
+        for key in ("failures", "paste", "stencil", "nozzles", "feeders"):
+            st.pop(key, None)
     return cfg

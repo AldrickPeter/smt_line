@@ -9,7 +9,7 @@ from smt_sim import Simulator
 from smt_sim.config import load_config, make_deterministic
 from smt_sim.events import ReasonCode, StationState
 from smt_sim.failures import FailureMode
-from smt_sim.metrics import downtime_pareto, find_bottleneck, state_intervals, station_oee, time_in_state
+from smt_sim.metrics import STOP_STATES, downtime_pareto, find_bottleneck, state_intervals, station_oee, time_in_state
 
 N_SAMPLES = 20_000
 
@@ -97,7 +97,7 @@ def test_faults_appear_with_their_reason_codes():
     assert ("pnp", ReasonCode.CONVEYOR_JAM) in seen
     assert ("pnp", ReasonCode.HEAD_SERVO_FAULT) in seen
     for row in pareto:
-        assert row.state == StationState.DOWN and row.total_s > 0
+        assert row.state in STOP_STATES and row.total_s > 0
 
 
 def test_observed_mtbf_matches_config():
@@ -119,7 +119,7 @@ def test_observed_mtbf_matches_config():
 def test_a_station_that_never_runs_never_wears():
     cfg = {
         "sim": {"tick_s": 0.5, "seed": 1},
-        "product": {"name": "T", "component_count": 0},
+        "product": {"name": "T", "bom": {}},
         "line": {"buffer_capacity": 1, "stations": [{
             "name": "A", "type": "generic", "cycle_time_s": 10.0,
             "failures": [{"reason": "CONVEYOR_JAM", "distribution": "exponential",
