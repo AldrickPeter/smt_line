@@ -1,0 +1,42 @@
+# Default line configuration. All times are in seconds.
+# Values are placeholders meant to be tuned.
+
+sim:
+  tick_s: 0.5          # simulated seconds per step()
+  seed: 42             # one RNG per run, created from this seed
+
+product:
+  name: CTRL-BOARD-A
+  component_count: 120 # parts placed per board (drives pick-and-place cycle time)
+
+line:
+  buffer_capacity: 5   # max boards waiting on each inter-station conveyor
+
+  # Listed upstream -> downstream. The order here IS the line order.
+  stations:
+    - name: printer
+      type: printer
+      cycle_time_s: 22.0
+
+    - name: spi
+      type: spi
+      cycle_time_s: 20.0
+
+    - name: pnp
+      type: pnp
+      board_handling_s: 8.0          # transfer in/out + fiducial alignment
+      time_per_component_s: 0.25     # 8 + 0.25 * 120 = 38 s/board -> bottleneck
+
+    - name: reflow
+      type: reflow
+      transit_time_s: 300.0          # time for a board to cross the oven
+      conveyor_length_mm: 4000.0
+      board_pitch_mm: 250.0          # min spacing -> 16 boards max, 1 entry / 18.75 s
+
+    - name: aoi
+      type: aoi
+      cycle_time_s: 25.0
+
+    - name: ict
+      type: ict
+      cycle_time_s: 30.0
