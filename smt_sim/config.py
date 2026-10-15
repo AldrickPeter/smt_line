@@ -18,13 +18,16 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
 def make_deterministic(config: dict[str, Any]) -> dict[str, Any]:
     """Copy of `config` with all randomness switched off.
 
-    No cycle-time jitter, no failures and no consumables (paste, stencil,
-    nozzles, feeders), so the line behaves exactly as the hand calculations
-    predict. Useful for tests and for checking the line's ideal capacity.
+    No cycle-time jitter, no failures, no consumables (paste, stencil,
+    nozzles, feeders), no oven temperature drift and no false calls, so no
+    board is ever rejected and the line behaves exactly as the hand
+    calculations predict. Changeovers stay (they are deterministic).
     """
     cfg = copy.deepcopy(config)
+    random_keys = ("failures", "paste", "stencil", "nozzles", "feeders",
+                   "temperature", "solder_defects", "false_calls_per_board")
     for st in cfg["line"]["stations"]:
         st["cycle_time_sd_s"] = 0.0
-        for key in ("failures", "paste", "stencil", "nozzles", "feeders"):
+        for key in random_keys:
             st.pop(key, None)
     return cfg

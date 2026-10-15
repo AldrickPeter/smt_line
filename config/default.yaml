@@ -51,6 +51,16 @@ production_plan:
     - {product: SENSOR-BOARD-B, quantity: 100}
     - {product: POWER-BOARD-C,  quantity: 100}
 
+# Which station an inspector blames for each defect type. Shared by SPI, AOI
+# and ICT through a YAML anchor (&attribution here, *attribution below).
+attribution: &attribution
+  INSUFFICIENT_PASTE: printer
+  EXCESS_PASTE: printer
+  MISPLACEMENT: pnp
+  TOMBSTONE: reflow
+  COLD_JOINT: reflow
+  VOID: reflow
+
 line:
   buffer_capacity: 5   # max boards waiting on each inter-station conveyor
 
@@ -101,6 +111,8 @@ line:
         board_volume_sd_pct: 2.5    # board-to-board noise
         pad_volume_sd_pct: 6.0      # pad-to-pad noise within a board
         pads_per_board: 400
+        insufficient_below_pct: 70  # true defect limits for a pad
+        excess_above_pct: 130
 
     - name: spi
       type: spi
@@ -113,6 +125,10 @@ line:
           mtbf_s: 28800             # 8 h
           repair_median_s: 300
           repair_sigma: 0.6
+      spec_pct: {min: 70, max: 130} # flag if the MEASURED min/max pad is outside
+      measurement_noise_pct: 1.5
+      scrap_if_calls_at_least: 3
+      attribution: *attribution
 
     - name: pnp
       type: pnp
@@ -148,24 +164,27 @@ line:
         low_reel_warning_boards: 15 # call operator when < 15 boards of parts left
         splice_miss_probability: 0.1
         reel_change_time_s: 120     # load a new reel after running empty
-        parts:                      # initial_qty staggered so reels don't all run out together
-          R0402-10K:    {reel_qty: 10000, initial_qty: 6000, mispick_rate: 0.0005}
-          C0402-100N:   {reel_qty: 10000, initial_qty: 9000, mispick_rate: 0.0005}
-          C0805-10U:    {reel_qty: 4000,  initial_qty: 3000, mispick_rate: 0.0003}
-          LED0603-GRN:  {reel_qty: 4000,  initial_qty: 2500, mispick_rate: 0.0003}
-          SOT23-NMOS:   {reel_qty: 3000,                     mispick_rate: 0.0003}
-          SOIC8-EEPROM: {reel_qty: 2500,                     mispick_rate: 0.0002}
-          QFN32-MCU:    {reel_qty: 490,   initial_qty: 300,  mispick_rate: 0.001}
-          USBC-CONN:    {reel_qty: 500,   initial_qty: 400,  mispick_rate: 0.001}
-          SOIC8-OPAMP:  {reel_qty: 2500,                     mispick_rate: 0.0002}
-          QFN24-SENSOR: {reel_qty: 490,                      mispick_rate: 0.001}
-          JST-CONN:     {reel_qty: 1000,                     mispick_rate: 0.001}
-          R0805-1R:     {reel_qty: 4000,                     mispick_rate: 0.0003}
-          C1206-47U:    {reel_qty: 3000,                     mispick_rate: 0.0003}
-          SOT223-LDO:   {reel_qty: 1000,                     mispick_rate: 0.0005}
-          DPAK-MOSFET:  {reel_qty: 800,                      mispick_rate: 0.0008}
-          INDUCTOR-4R7: {reel_qty: 500,                      mispick_rate: 0.001}
-          TERMINAL-2P:  {reel_qty: 300,                      mispick_rate: 0.001}
+        # initial_qty staggered so reels don't all run out together.
+        # tolerance_um: placement offset beyond this is a MISPLACEMENT defect
+        # (roughly half the pad overlap; tighter for fine-pitch QFNs).
+        parts:
+          R0402-10K:    {reel_qty: 10000, initial_qty: 6000, mispick_rate: 0.0005, tolerance_um: 150}
+          C0402-100N:   {reel_qty: 10000, initial_qty: 9000, mispick_rate: 0.0005, tolerance_um: 150}
+          C0805-10U:    {reel_qty: 4000,  initial_qty: 3000, mispick_rate: 0.0003, tolerance_um: 250}
+          LED0603-GRN:  {reel_qty: 4000,  initial_qty: 2500, mispick_rate: 0.0003, tolerance_um: 200}
+          SOT23-NMOS:   {reel_qty: 3000,                     mispick_rate: 0.0003, tolerance_um: 200}
+          SOIC8-EEPROM: {reel_qty: 2500,                     mispick_rate: 0.0002, tolerance_um: 250}
+          QFN32-MCU:    {reel_qty: 490,   initial_qty: 300,  mispick_rate: 0.001, tolerance_um: 100}
+          USBC-CONN:    {reel_qty: 500,   initial_qty: 400,  mispick_rate: 0.001, tolerance_um: 150}
+          SOIC8-OPAMP:  {reel_qty: 2500,                     mispick_rate: 0.0002, tolerance_um: 250}
+          QFN24-SENSOR: {reel_qty: 490,                      mispick_rate: 0.001, tolerance_um: 100}
+          JST-CONN:     {reel_qty: 1000,                     mispick_rate: 0.001, tolerance_um: 200}
+          R0805-1R:     {reel_qty: 4000,                     mispick_rate: 0.0003, tolerance_um: 250}
+          C1206-47U:    {reel_qty: 3000,                     mispick_rate: 0.0003, tolerance_um: 300}
+          SOT223-LDO:   {reel_qty: 1000,                     mispick_rate: 0.0005, tolerance_um: 250}
+          DPAK-MOSFET:  {reel_qty: 800,                      mispick_rate: 0.0008, tolerance_um: 300}
+          INDUCTOR-4R7: {reel_qty: 500,                      mispick_rate: 0.001, tolerance_um: 300}
+          TERMINAL-2P:  {reel_qty: 300,                      mispick_rate: 0.001, tolerance_um: 300}
 
     - name: reflow
       type: reflow
@@ -173,6 +192,19 @@ line:
       conveyor_length_mm: 4000.0
       board_pitch_mm: 250.0          # min spacing -> 16 boards max, 1 entry / 18.75 s
       changeover: {reason: PROFILE_CHANGE, time_s: 600}   # zones settle at new temps
+      temperature:
+        drift_sd_c: 3.0               # peak zone wanders about ±3 °C around setpoint
+        drift_time_constant_s: 7200   # ... slowly (hours)
+        board_sd_c: 1.0               # board-to-board spread
+      solder_defects:
+        cold_margin_c: 5              # below setpoint - 5 °C cold joints start
+        cold_joint_per_c: 0.05        # +5 % probability per °C further below
+        void_base_prob: 0.003
+        void_margin_c: 5
+        void_per_c: 0.03
+        tombstone_parts: [R0402-10K, C0402-100N]   # small chips that can stand up
+        tombstone_base_prob: 0.00001  # per chip
+        tombstone_per_c: 0.00001      # per chip per °C of deviation
       failures:
         - reason: HEATER_FAULT
           distribution: exponential
@@ -191,6 +223,17 @@ line:
           mtbf_s: 28800
           repair_median_s: 300
           repair_sigma: 0.6
+      detection_rate:               # chance AOI sees a real defect of each type
+        MISPLACEMENT: 0.95
+        INSUFFICIENT_PASTE: 0.60
+        EXCESS_PASTE: 0.85
+        TOMBSTONE: 0.98
+        COLD_JOINT: 0.50
+        VOID: 0.0                   # hidden under the part: AOI can't see it
+      false_calls_per_board: 0.02
+      false_call_types: [MISPLACEMENT, INSUFFICIENT_PASTE, TOMBSTONE]
+      scrap_if_calls_at_least: 3
+      attribution: *attribution
 
     - name: ict
       type: ict
@@ -203,3 +246,14 @@ line:
           mtbf_s: 21600
           repair_median_s: 300
           repair_sigma: 0.7
+      detection_rate:               # electrical test: catches opens and shorts
+        INSUFFICIENT_PASTE: 0.70
+        EXCESS_PASTE: 0.95
+        MISPLACEMENT: 0.40
+        TOMBSTONE: 0.95
+        COLD_JOINT: 0.50
+        VOID: 0.05
+      false_calls_per_board: 0.003
+      false_call_types: [COLD_JOINT]
+      scrap_if_calls_at_least: 3
+      attribution: *attribution

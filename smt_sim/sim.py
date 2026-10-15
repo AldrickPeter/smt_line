@@ -6,21 +6,25 @@ from typing import Any
 import numpy as np
 
 from smt_sim.board import Board, ProductionPlan
-from smt_sim.buffer import Buffer
+from smt_sim.buffer import Buffer, LineExit
 from smt_sim.components import Operator
 from smt_sim.config import load_config
 from smt_sim.events import EventLog
 from smt_sim.station import Station
+from smt_sim.stations.inspection import InspectionStation, SolderPasteInspection
 from smt_sim.stations.pnp import PickAndPlace
 from smt_sim.stations.printer import StencilPrinter
 from smt_sim.stations.reflow import ReflowOven
 
-# Station `type` in the config -> class. Types not listed use the base Station
-# (fixed cycle time) until their own behavior is added in later milestones.
+# Station `type` in the config -> class. Unknown types use the base Station
+# (fixed cycle time, no other behavior).
 STATION_CLASSES: dict[str, type[Station]] = {
     "printer": StencilPrinter,
+    "spi": SolderPasteInspection,
     "pnp": PickAndPlace,
     "reflow": ReflowOven,
+    "aoi": InspectionStation,
+    "ict": InspectionStation,
 }
 
 
@@ -48,7 +52,7 @@ class Simulator:
         first_product = next(iter(self.products))
         plan_cfg = config.get("production_plan") or {"jobs": [{"product": first_product}]}
         self.source = ProductionPlan(plan_cfg, self.products)
-        self.sink = Buffer("sink", capacity=None)   # finished boards collect here
+        self.sink = LineExit()   # good boards collect here
 
         self.stations: list[Station] = []
         self.buffers: list[Buffer] = []
@@ -120,6 +124,15 @@ class Simulator:
             boards += buf.boards()
         for st in self.stations:
             boards += st.boards_inside()
+        return boards + self.rejected_boards()
+
+    def rejected_boards(self) -> list[Board]:
+        """Boards pulled off the line by an inspection station."""
+        boards: list[Board] = []
+        for st in self.stations:
+            rejects = getattr(st, "rejects", None)
+            if rejects is not None:
+                boards += rejects.boards()
         return boards
 
     @property
@@ -137,7 +150,7 @@ class Simulator:
                 "state": st.state.value,
                 "reason_code": st.reason_code or "",
                 "part_count": st.part_count,
-                "reject_count": 0,   # inspection arrives in milestone 5
+                "reject_count": st.reject_count,
                 **st.extra_tags(),
             }
         for buf in self.buffers:

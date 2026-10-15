@@ -15,6 +15,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from smt_sim.defects import Disposition
 from smt_sim.events import EventLog, StationState
 
 if TYPE_CHECKING:   # only for type hints; avoids a circular import with sim.py
@@ -98,7 +99,10 @@ def station_oee(sim: Simulator) -> dict[str, StationOEE]:
                     Starved/blocked are caused by neighbours, so they are
                     removed from the denominator and reported separately.
     performance   = ideal work / running
-    quality       = 1.0 until inspection exists (milestone 5)
+    quality       = 1 − (boards with a detected defect blamed on this station
+                         / boards processed)
+                    Uses what inspection *attributed*, not ground truth, just
+                    like a real dashboard would.
     utilization   = ideal work / planned
                     How much of the station's capacity was used. Not part of
                     OEE; low utilization on a non-bottleneck is normal.
@@ -113,6 +117,7 @@ def station_oee(sim: Simulator) -> dict[str, StationOEE]:
     slots) shows up as utilization instead.
     """
     tis = time_in_state(state_intervals(sim.event_log, sim.time_s))
+    blamed = boards_blamed_per_station(sim)
     result = {}
     for st in sim.stations:
         t = tis[st.name]
@@ -128,7 +133,7 @@ def station_oee(sim: Simulator) -> dict[str, StationOEE]:
             performance = 1.0
         else:
             performance = _ratio(ideal_work_s, running_s)
-        quality = 1.0
+        quality = 1.0 - _ratio(blamed[st.name], st.part_count) if st.part_count else math.nan
         result[st.name] = StationOEE(
             planned_s=planned_s,
             running_s=running_s,
@@ -145,6 +150,15 @@ def station_oee(sim: Simulator) -> dict[str, StationOEE]:
     return result
 
 
+def boards_blamed_per_station(sim: Simulator) -> Counter[str]:
+    """For each station: how many boards had a detected defect attributed to it."""
+    blamed: Counter[str] = Counter()
+    for board in finished_boards(sim):
+        for origin in {d.attributed_origin for d in board.detected_defects}:
+            blamed[origin] += 1
+    return blamed
+
+
 @dataclass(frozen=True)
 class LineOEE:
     planned_s: float
@@ -159,8 +173,8 @@ def line_oee(sim: Simulator) -> LineOEE:
     OEE = Σ (good boards of product p × bottleneck ideal cycle of p) / planned time
 
     i.e. actual good output, valued at the line's ideal pace for each product,
-    divided by the time available. All boards count as good until defects
-    exist (milestone 5).
+    divided by the time available. Only boards that passed every inspection
+    reach the line exit, so rejects are automatically left out.
     """
     out_by_product = Counter(b.product for b in sim.sink.boards())
     bottleneck_s = {p: sim.bottleneck_ideal_cycle_s(p) for p in sim.products}
@@ -170,6 +184,68 @@ def line_oee(sim: Simulator) -> LineOEE:
         boards_out=sum(out_by_product.values()),
         bottleneck_ideal_cycle_s=bottleneck_s,
         oee=_ratio(ideal_output_s, sim.time_s),
+    )
+
+
+# ---- Quality ----------------------------------------------------------------
+
+
+def finished_boards(sim: Simulator) -> list:
+    """Boards that have left the line: passed (line exit) or rejected."""
+    return sim.sink.boards() + sim.rejected_boards()
+
+
+@dataclass(frozen=True)
+class QualityReport:
+    boards_finished: int
+    good: int
+    rework: int
+    scrap: int
+    first_pass_yield: float
+    rejects_by_station: dict[str, int]
+    detected_pareto: list[tuple[str, str, int]]   # (blamed station, defect type, count), largest first
+    # Validation against ground truth (a real factory can't see these):
+    true_defects_by_origin: dict[str, int]
+    escapes: int             # boards shipped as good that carry a real defect
+    false_rejects: int       # boards rejected that had no real defect at all
+    attribution_accuracy: float   # share of detected defects blamed on their true origin
+
+
+def quality_report(sim: Simulator) -> QualityReport:
+    """First-pass yield, reject Pareto, and a ground-truth check of inspection.
+
+    first-pass yield = boards that passed every inspection the first time
+                       / boards that have left the line (passed or rejected)
+
+    Boards still on the line are left out of both counts, so a short run
+    isn't biased by boards that simply haven't been inspected yet. Rejected
+    boards are not re-run, so "passed" here always means passed first time.
+    """
+    boards = finished_boards(sim)
+    dispositions = Counter(b.disposition for b in boards)
+    rejects = Counter(b.rejected_at for b in boards if b.rejected_at)
+    detected = Counter((d.attributed_origin, d.type) for b in boards for d in b.detected_defects)
+    true_by_origin = Counter(d.origin_station for b in boards for d in b.true_defects)
+
+    correct = total = 0
+    for b in boards:
+        for d in b.detected_defects:
+            true_origins = {t.origin_station for t in b.true_defects if t.type == d.type}
+            correct += d.attributed_origin in true_origins
+            total += 1
+
+    return QualityReport(
+        boards_finished=len(boards),
+        good=dispositions[Disposition.GOOD],
+        rework=dispositions[Disposition.REWORK],
+        scrap=dispositions[Disposition.SCRAP],
+        first_pass_yield=_ratio(dispositions[Disposition.GOOD], len(boards)),
+        rejects_by_station=dict(rejects),
+        detected_pareto=[(origin, typ, n) for (origin, typ), n in detected.most_common()],
+        true_defects_by_origin=dict(true_by_origin),
+        escapes=sum(1 for b in boards if b.disposition == Disposition.GOOD and b.true_defects),
+        false_rejects=sum(1 for b in boards if b.rejected_at and not b.true_defects),
+        attribution_accuracy=_ratio(correct, total),
     )
 
 
@@ -302,12 +378,12 @@ def format_report(sim: Simulator) -> str:
     lines.append(f"  bottleneck ideal cycle per product: {cycles}")
     lines.append("")
     lines.append(f"{'station':10s} {'running':>8s} {'starved':>8s} {'blocked':>8s}"
-                 f" {'avail':>7s} {'perf':>7s} {'OEE':>7s} {'util':>7s} {'boards':>7s}")
+                 f" {'avail':>7s} {'perf':>7s} {'qual':>7s} {'OEE':>7s} {'util':>7s} {'boards':>7s}")
     for name, m in station_oee(sim).items():
         p = m.planned_s
         lines.append(
             f"{name:10s} {m.running_s / p:8.1%} {m.starved_s / p:8.1%} {m.blocked_s / p:8.1%}"
-            f" {m.availability:7.1%} {m.performance:7.1%} {m.oee:7.1%} {m.utilization:7.1%}"
+            f" {m.availability:7.1%} {m.performance:7.1%} {m.quality:7.1%} {m.oee:7.1%} {m.utilization:7.1%}"
             f" {m.boards_processed:7d}"
         )
 
@@ -322,4 +398,16 @@ def format_report(sim: Simulator) -> str:
     lines.append("Downtime Pareto:" + ("" if pareto else " (no stops)"))
     for row in pareto:
         lines.append(f"  {row.station:10s} {row.reason_code:16s} {row.total_s:8.1f} s  x{row.occurrences}")
+
+    q = quality_report(sim)
+    lines.append("")
+    lines.append(f"Quality: first-pass yield {q.first_pass_yield:.1%}   good {q.good}   "
+                 f"rework {q.rework}   scrap {q.scrap}   (of {q.boards_finished} finished)")
+    lines.append("  rejects by station: " + ", ".join(f"{s} {n}" for s, n in q.rejects_by_station.items()))
+    lines.append("  detected defects (blamed station, type):")
+    for origin, typ, n in q.detected_pareto:
+        lines.append(f"    {origin:10s} {typ:20s} {n:5d}")
+    lines.append(f"  ground truth check: escapes {q.escapes}, false rejects {q.false_rejects}, "
+                 f"attribution accuracy {q.attribution_accuracy:.1%}")
+    lines.append("    true defects by origin: " + ", ".join(f"{s} {n}" for s, n in q.true_defects_by_origin.items()))
     return "\n".join(lines)

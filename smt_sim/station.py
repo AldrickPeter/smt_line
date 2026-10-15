@@ -74,7 +74,8 @@ class Station:
 
         self.state = StationState.STARVED
         self.reason_code: str | None = None
-        self.part_count = 0          # boards completed and handed downstream
+        self.part_count = 0          # boards completed (passed on or rejected)
+        self.reject_count = 0        # boards pulled off the line (inspection stations)
         self.parts_by_product: Counter[str] = Counter()
         self.current_product: str | None = None   # what the station is set up for
 
@@ -106,6 +107,10 @@ class Station:
         self._stop_state = StationState.DOWN
         self._stop_reason = reason_code
         self._stop_remaining_s = duration_s
+
+    def _output_for(self, board: Board) -> Any:
+        """Where a finished board goes. Inspection stations divert rejects."""
+        return self.output_buffer
 
     def boards_inside(self) -> list[Board]:
         """Boards currently held by this station."""
@@ -154,10 +159,11 @@ class Station:
         """Single-board server logic: push finished, pull next, prepare, work."""
         # Hand off a finished board.
         if self.current_board is not None and self.remaining_s <= 0:
-            if not self.output_buffer.has_space():
+            destination = self._output_for(self.current_board)
+            if not destination.has_space():
                 self._set_state(StationState.BLOCKED)
                 return
-            self._finish_board(self.current_board)
+            self._finish_board(self.current_board, destination)
             self.current_board = None
 
         # Pull the next board.
@@ -230,9 +236,11 @@ class Station:
                 self.force_down(mode.reason_code, mode.sample_repair_s())
                 return   # one failure at a time
 
-    def _finish_board(self, board: Board) -> None:
+    def _finish_board(self, board: Board, destination: Any = None) -> None:
         board.time_out_s[self.name] = self._time_s
-        self.output_buffer.push(board)
+        if destination is None:   # not `or`: an empty Buffer has len 0 and counts as False
+            destination = self.output_buffer
+        destination.push(board)
         self.part_count += 1
         self.parts_by_product[board.product] += 1
 

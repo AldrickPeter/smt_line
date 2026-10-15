@@ -3,10 +3,15 @@
 A board carries its product spec (BOM, reflow profile, ...) so every station
 can see what it is working on. `measurements` holds what each station
 physically did to the board plus the cause values behind it.
+
+Quality fields (see defects.py): ground truth (`true_defects`) is kept apart
+from what inspection observed (`detected_defects`, `false_calls`).
 """
 
 from dataclasses import dataclass, field
 from typing import Any
+
+from smt_sim.defects import DetectedDefect, FalseCall, TrueDefect
 
 
 @dataclass
@@ -17,6 +22,11 @@ class Board:
     time_in_s: dict[str, float] = field(default_factory=dict)   # station name -> sim time entered
     time_out_s: dict[str, float] = field(default_factory=dict)  # station name -> sim time left
     measurements: dict[str, dict[str, Any]] = field(default_factory=dict)  # station name -> values
+    true_defects: list[TrueDefect] = field(default_factory=list)
+    detected_defects: list[DetectedDefect] = field(default_factory=list)
+    false_calls: list[FalseCall] = field(default_factory=list)
+    disposition: str | None = None     # Disposition.*, set when the board leaves the line
+    rejected_at: str | None = None     # inspection station that pulled it off the line
 
     @property
     def bom(self) -> dict[str, int]:

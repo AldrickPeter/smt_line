@@ -21,6 +21,10 @@ Reels and the operator:
   - If the reel runs empty first: STARVED_MATERIAL / FEEDER_EMPTY until the
     operator arrives, plus the time to load a new reel.
 
+True defects: a part placed further from its pad than its `tolerance_um`
+is a MISPLACEMENT (origin: pnp), with the nozzle and offset as detail, so a
+clogged or worn nozzle is traceable.
+
 Changeover: the machine has a fixed number of feeder slots. A new product's
 parts that are not mounted yet are swapped in, replacing feeders the new
 product does not use. Changeover time = fixed part + time per feeder swapped,
@@ -35,6 +39,7 @@ from typing import Any
 
 from smt_sim.board import Board
 from smt_sim.components import Feeder, Nozzle
+from smt_sim.defects import DefectType, TrueDefect
 from smt_sim.events import ReasonCode, StationState
 from smt_sim.station import Station
 
@@ -150,6 +155,11 @@ class PickAndPlace(Station):
             nozzle.consecutive_fails = 0
             self._placements.append((part, nozzle.nozzle_id, offset_um))
             self._picks_todo.pop()
+
+        for part, nozzle_id, offset_um in self._placements:
+            if abs(offset_um) > self.parts_cfg[part]["tolerance_um"]:
+                board.true_defects.append(TrueDefect(
+                    DefectType.MISPLACEMENT, self.name, f"{part} nozzle {nozzle_id} offset {offset_um:.0f} um"))
 
         board.measurements[self.name] = {
             "placements": self._placements,   # (part number, nozzle id, offset µm)

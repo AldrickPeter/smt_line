@@ -3,6 +3,7 @@
 from collections import deque
 
 from smt_sim.board import Board
+from smt_sim.defects import Disposition
 
 
 class Buffer:
@@ -43,3 +44,14 @@ class Buffer:
 
     def __len__(self) -> int:
         return len(self._boards)
+
+
+class LineExit(Buffer):
+    """End of the line: boards arriving here passed every inspection."""
+
+    def __init__(self) -> None:
+        super().__init__("line_exit", capacity=None)
+
+    def push(self, board: Board) -> None:
+        board.disposition = Disposition.GOOD
+        super().push(board)

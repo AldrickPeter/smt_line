@@ -13,6 +13,10 @@ defect found later can be traced back to "printed 9 prints after a wipe with
 Each product has its own stencil. A changeover swaps the stencil (each one
 keeps its own wear and clogging); the paste stays on the machine.
 
+True defects: a pad below `insufficient_below_pct` is INSUFFICIENT_PASTE, a
+pad above `excess_above_pct` is EXCESS_PASTE (origin: printer). One defect
+record per type per board, with the number of pads affected as detail.
+
 Stops:
   - wipe due (every N prints): DOWN / STENCIL_WIPE. It is a planned, short
     stop, but it is logged as DOWN so it counts against availability and
@@ -25,6 +29,7 @@ from typing import Any
 
 from smt_sim.board import Board
 from smt_sim.components import SolderPaste, Stencil
+from smt_sim.defects import DefectType, TrueDefect
 from smt_sim.events import ReasonCode, StationState
 from smt_sim.station import Station
 
@@ -42,6 +47,8 @@ class StencilPrinter(Station):
         self.board_volume_sd_pct = float(quality.get("board_volume_sd_pct", 0.0))
         self.pad_volume_sd_pct = float(quality.get("pad_volume_sd_pct", 0.0))
         self.pads_per_board = int(quality.get("pads_per_board", 1))
+        self.insufficient_below_pct = float(quality.get("insufficient_below_pct", 70.0))
+        self.excess_above_pct = float(quality.get("excess_above_pct", 130.0))
 
     def _setup_for(self, board: Board) -> float:
         if self.stencil_cfg is not None:
@@ -79,6 +86,13 @@ class StencilPrinter(Station):
             "stencil_cycles": self.stencil.cycle_count,
             "paste_open_time_h": self.paste.open_time_h(self._time_s),
         }
+        n_low = int((pads_pct < self.insufficient_below_pct).sum())
+        n_high = int((pads_pct > self.excess_above_pct).sum())
+        if n_low:
+            board.true_defects.append(TrueDefect(DefectType.INSUFFICIENT_PASTE, self.name, f"{n_low} pads"))
+        if n_high:
+            board.true_defects.append(TrueDefect(DefectType.EXCESS_PASTE, self.name, f"{n_high} pads"))
+
         self.paste.consume_print()
         self.stencil.record_print()
         return True
