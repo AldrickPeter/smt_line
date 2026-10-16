@@ -144,6 +144,8 @@ Decisions: objective = weighted tardiness against due dates (makespan as tie-bre
 - **P6 Comparison + charts**: Gantt per method, KPI mean ± 95 % CI, distribution over seeds, paired improvement vs FIFO, planned vs simulated, solver scaling.
 - **P7 (optional)** Re-planning after disruptions.
 
+Status: P1–P6 done. Re-calibrate with `scripts/calibrate_planning_model.py` (writes `config/planning_model.yaml`) whenever the line config changes; run the experiment with `scripts/compare_planners.py` (and `--scaling`); outputs go to `out/planning/` (git-ignored). Jobs carry `planned_yield` (a scrap allowance from the model's measured FPY) to avoid most top-up lots. Findings so far: changeover cost (~35 min) barely depends on the product pair, so the number of changeovers matters more than their order; CP-SAT and MILP match brute force up to 8 orders, MILP falls behind (even behind EDD at 16 orders) once the time limit binds; under simulation the optimizer's paper advantage shrinks on the large book because tight plans have no slack and top-up lots land at the end of a line.
+
 ## Extensions after the simulator milestones
 
 9. **Equipment speed** (done): `speed_pct` per station (config, `Station.set_speed()`, `set_speed` scenario action, `speed_pct` tag, Tab + Left/Right in the viewer). Cycle time = rated / speed; OEE stays measured against rated speed, so slow running is a performance loss. Pick-and-place offset spread and pick failures scale as speed^exponent (`speed_effects`), clog effects don't. The reflow oven's speed is fixed by its profile.

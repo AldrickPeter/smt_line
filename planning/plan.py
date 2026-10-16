@@ -53,20 +53,42 @@ class Prediction:
     changeovers: int
 
 
+@dataclass(frozen=True)
+class ScheduledLot:
+    lot: Lot
+    setup_start_s: float   # changeover begins (== start_s when there is none)
+    start_s: float         # production of the lot begins
+    end_s: float           # last good board of the lot is out
+
+
+def timeline(plan: Plan, model: PlanningModel) -> dict[str, list[ScheduledLot]]:
+    """The planning model's timeline per line: lots back to back, changeovers in between."""
+    result = {}
+    for line, lots in plan.lines.items():
+        t = model.fill_s[line] if lots else 0.0
+        previous = None
+        scheduled = []
+        for lot in lots:
+            setup_start = t
+            t += model.setup_s(line, previous, lot.product)
+            start = t
+            t += model.lot_duration_s(line, lot.product, lot.quantity)
+            scheduled.append(ScheduledLot(lot, setup_start, start, t))
+            previous = lot.product
+        result[line] = scheduled
+    return result
+
+
 def predict(plan: Plan, orders: list[Order], model: PlanningModel) -> Prediction:
     """What the planning model expects this plan to do (no randomness)."""
     by_id = {o.id: o for o in orders}
     completion: dict[str, float] = {}
     changeovers = 0
-    for line, lots in plan.lines.items():
-        t = model.fill_s[line] if lots else 0.0
-        previous = None
-        for lot in lots:
-            if previous is not None and previous != lot.product:
+    for scheduled in timeline(plan, model).values():
+        for k, s in enumerate(scheduled):
+            completion[s.lot.order_id] = s.end_s
+            if k > 0 and scheduled[k - 1].lot.product != s.lot.product:
                 changeovers += 1
-            t += model.setup_s(line, previous, lot.product) + model.lot_duration_s(line, lot.product, lot.quantity)
-            completion[lot.order_id] = t
-            previous = lot.product
     return Prediction(
         completion_s=completion,
         makespan_s=max(completion.values(), default=0.0),
