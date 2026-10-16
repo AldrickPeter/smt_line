@@ -366,6 +366,35 @@ def find_bottleneck(sim: Simulator) -> BottleneckResult:
     return BottleneckResult(bottleneck, mean_active, upstream_ok and downstream_ok)
 
 
+# ---- Root-cause diagnosis -------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Diagnosis:
+    bottleneck: str
+    top_bottleneck_stop: ParetoRow | None        # biggest own stop at the bottleneck
+    top_defect: tuple[str, str, int] | None      # (blamed station, defect type, count)
+
+
+def diagnose(sim: Simulator) -> Diagnosis:
+    """Point at the most likely root causes, using only observable data.
+
+    Throughput: lost time at the bottleneck is lost output for the whole line,
+    while a stop at a non-bottleneck is often absorbed by buffers (the printer
+    wipes its stencil while it would be blocked anyway). So the throughput
+    root cause is the bottleneck's own largest stop, not the top of the
+    line-wide Pareto. Changeovers (SETUP) are left out: they are planned,
+    not a fault to fix.
+
+    Quality: the most frequent detected defect and the station it is blamed on.
+    """
+    bottleneck = find_bottleneck(sim).station
+    rows = downtime_pareto(state_intervals(sim.event_log, sim.time_s))
+    stops = [r for r in rows if r.station == bottleneck and r.state != StationState.SETUP]
+    pareto = quality_report(sim).detected_pareto
+    return Diagnosis(bottleneck, stops[0] if stops else None, pareto[0] if pareto else None)
+
+
 # ---- Text report ----------------------------------------------------------
 
 
@@ -410,4 +439,14 @@ def format_report(sim: Simulator) -> str:
     lines.append(f"  ground truth check: escapes {q.escapes}, false rejects {q.false_rejects}, "
                  f"attribution accuracy {q.attribution_accuracy:.1%}")
     lines.append("    true defects by origin: " + ", ".join(f"{s} {n}" for s, n in q.true_defects_by_origin.items()))
+
+    d = diagnose(sim)
+    lines.append("")
+    lines.append(f"Diagnosis: bottleneck {d.bottleneck}")
+    if d.top_bottleneck_stop is not None:
+        r = d.top_bottleneck_stop
+        lines.append(f"  biggest throughput loss: {r.station} {r.reason_code} ({r.total_s / 60:.0f} min, x{r.occurrences})")
+    if d.top_defect is not None:
+        origin, typ, n = d.top_defect
+        lines.append(f"  biggest quality loss:    {typ} blamed on {origin} ({n} boards)")
     return "\n".join(lines)

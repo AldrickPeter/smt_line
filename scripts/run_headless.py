@@ -3,6 +3,11 @@
 Usage:
     python scripts/run_headless.py [--hours 8] [--config path.yaml] [--seed 42]
                                    [--events-csv out/events.csv] [--boards-csv out/boards.csv]
+    python scripts/run_headless.py --scenario nozzle_fault [--baseline] [--seed 1]
+
+With --scenario the run length defaults to the scenario's duration_h, and the
+report ends with the scenario's expected root cause. --baseline runs the same
+scenario without its interventions, for comparison.
 """
 
 import argparse
@@ -15,19 +20,32 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # allow runnin
 from smt_sim import Simulator  # noqa: E402
 from smt_sim.export import boards_to_csv  # noqa: E402
 from smt_sim.metrics import finished_boards, format_report  # noqa: E402
+from smt_sim.scenarios import load_scenario  # noqa: E402
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--hours", type=float, default=8.0)
+    parser.add_argument("--hours", type=float, default=None, help="default 8, or the scenario's duration")
     parser.add_argument("--config", default=None)
+    parser.add_argument("--scenario", default=None, help="name in config/scenarios/ or a path")
+    parser.add_argument("--baseline", action="store_true", help="run the scenario without its interventions")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--events-csv", default=None, help="write the event log to this CSV file")
     parser.add_argument("--boards-csv", default=None, help="write finished board records to this CSV file")
     args = parser.parse_args()
 
-    sim = Simulator(args.config, seed=args.seed)
-    sim_s = args.hours * 3600
+    scenario = None
+    if args.scenario:
+        scenario = load_scenario(args.scenario)
+        sim = scenario.build_simulator(seed=args.seed, with_interventions=not args.baseline)
+        hours = args.hours or scenario.duration_h
+        print(f"Scenario {scenario.name}{' (BASELINE, no interventions)' if args.baseline else ''}: "
+              f"{scenario.description}\n")
+    else:
+        sim = Simulator(args.config, seed=args.seed)
+        hours = args.hours or 8.0
+    args.hours = hours
+    sim_s = hours * 3600
 
     wall_start = time.perf_counter()
     sim.run(sim_s)
@@ -39,6 +57,10 @@ def main() -> None:
           f"({sim.boards_completed / args.hours:.1f} boards/h)")
     print(f"Event log entries: {len(sim.event_log)}\n")
     print(format_report(sim))
+    if scenario is not None:
+        print(f"\nScenario expects: {scenario.expected_root_cause}")
+        for at_s, label in sim.intervention_log:
+            print(f"  applied at {at_s:7.0f} s: {label}")
 
     if args.events_csv:
         Path(args.events_csv).parent.mkdir(parents=True, exist_ok=True)

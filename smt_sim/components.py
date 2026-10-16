@@ -76,6 +76,10 @@ class Stencil:
               so less paste is released. Wiping removes it.
     wear:     apertures slowly deform over the stencil's life, a small
               permanent downward drift in transfer.
+
+    Wear is accumulated print by print (not computed as rate × total cycles),
+    so if the wear rate changes later (e.g. the stencil gets damaged), only
+    the prints after the change wear faster.
     """
 
     def __init__(self, cfg: dict[str, Any]) -> None:
@@ -84,6 +88,7 @@ class Stencil:
         self.clog_loss_pct_per_print = float(cfg["clog_loss_pct_per_print"])
         self.wear_loss_pct_per_1k_cycles = float(cfg["wear_loss_pct_per_1k_cycles"])
         self.cycle_count = int(cfg.get("initial_cycles", 0))
+        self.wear_loss_pct = self.wear_loss_pct_per_1k_cycles * self.cycle_count / 1000.0
         self.prints_since_wipe = 0
 
     def wipe_due(self) -> bool:
@@ -91,12 +96,12 @@ class Stencil:
 
     def transfer_loss_pct(self) -> float:
         clog = self.clog_loss_pct_per_print * self.prints_since_wipe
-        wear = self.wear_loss_pct_per_1k_cycles * self.cycle_count / 1000.0
-        return clog + wear
+        return clog + self.wear_loss_pct
 
     def record_print(self) -> None:
         self.prints_since_wipe += 1
         self.cycle_count += 1
+        self.wear_loss_pct += self.wear_loss_pct_per_1k_cycles / 1000.0
 
     def wipe(self) -> None:
         self.prints_since_wipe = 0

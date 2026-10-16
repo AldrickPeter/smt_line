@@ -1,5 +1,8 @@
 """Simulator: builds the line from config and runs the tick loop."""
 
+import bisect
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +31,16 @@ STATION_CLASSES: dict[str, type[Station]] = {
 }
 
 
+@dataclass(order=True)
+class ScheduledIntervention:
+    """Something a scenario (or test) will do to the line at a given sim time."""
+
+    at_s: float
+    seq: int                                   # tie-breaker: same time -> scheduling order
+    label: str = field(compare=False)
+    action: Callable[["Simulator"], None] = field(compare=False)
+
+
 class Simulator:
     """A six-station SMT line advanced in fixed time steps (ticks).
 
@@ -46,6 +59,9 @@ class Simulator:
         self.tick = 0
         self.time_s = 0.0
         self.event_log = EventLog()
+        self._scheduled: list[ScheduledIntervention] = []   # kept sorted by time
+        self._schedule_count = 0
+        self.intervention_log: list[tuple[float, str]] = []   # (sim time, label) of applied ones
 
         self.products: dict[str, dict[str, Any]] = config["products"]
         # Without a plan, run the first product forever.
@@ -60,6 +76,7 @@ class Simulator:
 
     def _build_line(self, line_cfg: dict[str, Any]) -> None:
         operator = Operator(line_cfg["operator"], self.rng) if "operator" in line_cfg else None
+        self.operator = operator   # one operator shared by all stations
         station_cfgs = line_cfg["stations"]
         upstream: Any = self.source
         for i, st_cfg in enumerate(station_cfgs):
@@ -85,10 +102,22 @@ class Simulator:
         a board from its input buffer, the station before it sees the freed
         slot in the same tick instead of waiting an extra tick.
         """
+        self._apply_due_interventions()
         for station in reversed(self.stations):
             station.step(self.tick, self.time_s, self.dt_s)
         self.tick += 1
         self.time_s = self.tick * self.dt_s   # multiply, don't accumulate, to avoid float drift
+
+    def schedule(self, at_s: float, label: str, action: Callable[["Simulator"], None]) -> None:
+        """Run `action(sim)` at the start of the first tick at or after `at_s`."""
+        self._schedule_count += 1
+        bisect.insort(self._scheduled, ScheduledIntervention(at_s, self._schedule_count, label, action))
+
+    def _apply_due_interventions(self) -> None:
+        while self._scheduled and self._scheduled[0].at_s <= self.time_s:
+            item = self._scheduled.pop(0)
+            item.action(self)
+            self.intervention_log.append((self.time_s, item.label))
 
     def run(self, seconds: float) -> None:
         """Run headless for `seconds` of simulated time."""

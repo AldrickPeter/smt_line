@@ -2,6 +2,7 @@
 
 Usage:
     python viz/pygame_view.py [--config path.yaml] [--seed 42] [--speed 60]
+    python viz/pygame_view.py --scenario nozzle_fault
 
 Controls:
     Up / Down (or + / -)   faster / slower simulation
@@ -27,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # allow runnin
 from smt_sim import Simulator  # noqa: E402
 from smt_sim.events import StationState  # noqa: E402
 from smt_sim.metrics import line_oee, quality_report, station_oee  # noqa: E402
+from smt_sim.scenarios import load_scenario  # noqa: E402
 
 WIDTH, HEIGHT = 1280, 720
 FPS = 30
@@ -244,8 +246,13 @@ def main() -> None:
     parser.add_argument("--config", default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--speed", type=float, default=60.0, help="sim seconds per real second")
+    parser.add_argument("--scenario", default=None, help="name in config/scenarios/ or a path")
     args = parser.parse_args()
-    run(Simulator(args.config, seed=args.seed), speed=args.speed)
+    if args.scenario:
+        sim = load_scenario(args.scenario).build_simulator(seed=args.seed)
+    else:
+        sim = Simulator(args.config, seed=args.seed)
+    run(sim, speed=args.speed)
 
 
 if __name__ == "__main__":

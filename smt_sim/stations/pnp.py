@@ -155,11 +155,12 @@ class PickAndPlace(Station):
             nozzle.consecutive_fails = 0
             self._placements.append((part, nozzle.nozzle_id, offset_um))
             self._picks_todo.pop()
-
-        for part, nozzle_id, offset_um in self._placements:
             if abs(offset_um) > self.parts_cfg[part]["tolerance_um"]:
+                # Ground-truth detail, including whether the nozzle was clogged at that moment.
+                state = "clogged" if nozzle.clogged else "ok"
                 board.true_defects.append(TrueDefect(
-                    DefectType.MISPLACEMENT, self.name, f"{part} nozzle {nozzle_id} offset {offset_um:.0f} um"))
+                    DefectType.MISPLACEMENT, self.name,
+                    f"{part} nozzle {nozzle.nozzle_id} ({state}) offset {offset_um:.0f} um"))
 
         board.measurements[self.name] = {
             "placements": self._placements,   # (part number, nozzle id, offset µm)
