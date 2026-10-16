@@ -11,7 +11,14 @@ pygame = pytest.importorskip("pygame")
 
 from smt_sim import Simulator  # noqa: E402
 from smt_sim.factory import Factory  # noqa: E402
-from viz.pygame_view import WIDTH, FactoryView, advance, window_height  # noqa: E402
+from viz.pygame_view import (  # noqa: E402
+    WIDTH,
+    FactoryView,
+    adjustable_stations,
+    advance,
+    change_station_speed,
+    window_height,
+)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -54,6 +61,18 @@ def test_advance_keeps_exact_speed_with_fractional_ticks():
     for _ in range(30):    # 1 real second at 600x
         debt = advance(sim, speed=600, frame_s=1 / 30, tick_debt=debt)
     assert sim.time_s - start == pytest.approx(600.0, abs=sim.dt_s)
+
+
+def test_station_speed_keys_skip_the_oven_and_stay_in_range():
+    factory = Factory.from_config()
+    selectable = adjustable_stations(factory)
+    assert ("line1", "pnp") in selectable and ("line1", "reflow") not in selectable
+    for _ in range(30):
+        change_station_speed(factory, ("line1", "pnp"), -5)
+    assert factory.lines["line1"].station("pnp").speed_pct == 5
+    for _ in range(30):
+        change_station_speed(factory, ("line1", "pnp"), +5)
+    assert factory.lines["line1"].station("pnp").speed_pct == 100
 
 
 def test_simulation_core_never_imports_pygame():

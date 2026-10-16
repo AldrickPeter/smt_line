@@ -180,6 +180,7 @@ class Simulator:
                 "reason_code": st.reason_code or "",
                 "part_count": st.part_count,
                 "reject_count": st.reject_count,
+                "speed_pct": st.speed_pct,     # a setpoint: later a writable OPC UA tag
                 **st.extra_tags(),
             }
         for buf in self.buffers:

@@ -77,6 +77,11 @@ def accelerate_stencil_wear(sim: Simulator, station: str, factor: float) -> None
         stencil.wear_loss_pct_per_1k_cycles *= factor
 
 
+def set_speed(sim: Simulator, station: str, speed_pct: float) -> None:
+    """Run a station at `speed_pct` of its rated speed from its next board."""
+    sim.station(station).set_speed(speed_pct)
+
+
 def force_down(sim: Simulator, station: str, reason: str, duration_s: float) -> None:
     sim.station(station).force_down(reason, duration_s)
 
@@ -88,6 +93,7 @@ ACTIONS: dict[str, Callable[..., None]] = {
     "set_splice_miss_probability": set_splice_miss_probability,
     "set_operator_response": set_operator_response,
     "accelerate_stencil_wear": accelerate_stencil_wear,
+    "set_speed": set_speed,
     "force_down": force_down,
 }
 

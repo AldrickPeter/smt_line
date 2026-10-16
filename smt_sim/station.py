@@ -71,6 +71,8 @@ class Station:
         self.rng = rng   # the run's single shared generator
         self.operator = operator
         self.failure_modes = [FailureMode(f, rng) for f in params.get("failures", [])]
+        self.speed_pct = 100.0
+        self.set_speed(params.get("speed_pct", 100.0))   # validates the configured value
 
         self.state = StationState.STARVED
         self.reason_code: str | None = None
@@ -97,8 +99,23 @@ class Station:
     # ---- public API -------------------------------------------------------
 
     def cycle_time_for(self, board: Board) -> float:
-        """Ideal processing time for one board, in seconds."""
+        """Ideal (rated, 100 % speed) processing time for one board, in seconds."""
         return float(self.params["cycle_time_s"])
+
+    @property
+    def speed_fraction(self) -> float:
+        return self.speed_pct / 100.0
+
+    def set_speed(self, speed_pct: float) -> None:
+        """Run the machine at `speed_pct` of its rated speed (0 < speed <= 100).
+
+        Takes effect from the next board; a board in progress keeps its time.
+        OEE still measures against the rated (100 %) cycle, so running slower
+        shows up as a performance (speed) loss, as it would in a real plant.
+        """
+        if not 0 < speed_pct <= 100:
+            raise ValueError(f"{self.name}: speed_pct must be in (0, 100], got {speed_pct}")
+        self.speed_pct = float(speed_pct)
 
     def force_down(self, reason_code: str, duration_s: float) -> None:
         """Stop the station (DOWN) from the next tick. Used by failures, tests
@@ -219,16 +236,16 @@ class Station:
         self._stop_remaining_s -= dt_s
 
     def _sample_cycle_time(self, board: Board) -> float:
-        """Actual time for this board: ideal plus normal jitter.
+        """Actual time for this board: ideal at the set speed, plus normal jitter.
 
-        Clipped at the ideal cycle time, because the ideal is by definition
-        the fastest the machine can go; disturbances only slow it down.
+        Clipped at that time, because it is the fastest the machine can go at
+        this speed; disturbances only slow it down.
         """
-        ideal_s = self.cycle_time_for(board)
+        nominal_s = self.cycle_time_for(board) / self.speed_fraction
         sd_s = self.params.get("cycle_time_sd_s", 0.0)
         if sd_s <= 0:
-            return ideal_s
-        return max(ideal_s, ideal_s + self.rng.normal(0.0, sd_s))
+            return nominal_s
+        return max(nominal_s, nominal_s + self.rng.normal(0.0, sd_s))
 
     def _age_failure_modes(self, dt_s: float) -> None:
         for mode in self.failure_modes:

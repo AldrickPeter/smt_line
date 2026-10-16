@@ -177,16 +177,22 @@ class Nozzle:
         n = self.picks_since_clean
         return (self.beta / self.eta) * (n / self.eta) ** (self.beta - 1)
 
-    def pick(self) -> tuple[float, bool]:
-        """One pick. Returns (placement offset in µm, pick failed?)."""
+    def pick(self, offset_scale: float = 1.0, fail_scale: float = 1.0) -> tuple[float, bool]:
+        """One pick. Returns (placement offset in µm, pick failed?).
+
+        offset_scale / fail_scale come from the head speed (1.0 at rated
+        speed, smaller when slowed down). They scale the normal and wear-related
+        spread and the normal failure rate, but not the clog's extra spread
+        or failures: slowing the head down doesn't unclog a nozzle.
+        """
         self.picks_since_clean += 1
         if not self.clogged and self.rng.random() < self.hazard():
             self.clogged = True
         wear = self.picks_since_clean / self.eta
-        sigma_um = (self.base_offset_sd_um + self.wear_offset_sd_um * wear
+        sigma_um = ((self.base_offset_sd_um + self.wear_offset_sd_um * wear) * offset_scale
                     + (self.clog_offset_sd_um if self.clogged else 0.0))
         offset_um = float(self.rng.normal(0.0, sigma_um))
-        fail_prob = self.clog_pick_fail_prob if self.clogged else self.base_pick_fail_prob
+        fail_prob = self.clog_pick_fail_prob if self.clogged else self.base_pick_fail_prob * fail_scale
         pick_failed = bool(self.rng.random() < fail_prob)
         return offset_um, pick_failed
 

@@ -8,14 +8,17 @@ Usage:
 Controls:
     Up / Down (or + / -)   faster / slower simulation
     Space                  pause / resume
+    Tab                    select the next station (outlined in white)
+    Left / Right           selected station's speed -5 % / +5 % (of rated speed)
     Esc or Q               quit
 
 Design: this file is the only place that imports pygame. `FactoryView` only
 *reads* the lines (tags, buffers, event logs, metrics) and draws them; it
 never changes simulation state. A single line is shown as a factory with one
 line. The `run()` loop is the controller: it decides how many ticks to advance
-per frame to hit the chosen speed, then asks the view to draw. The simulation
-core still runs headless without any of this.
+per frame to hit the chosen speed, handles the keys (including station speed,
+like an operator panel would), then asks the view to draw. The simulation core
+still runs headless without any of this.
 """
 
 import argparse
@@ -36,6 +39,8 @@ from smt_sim.scenarios import load_scenario  # noqa: E402
 WIDTH = 1280
 FPS = 30
 SPEEDS = [1, 2, 5, 10, 30, 60, 120, 300, 600, 1800, 3600]   # sim seconds per real second
+STATION_SPEED_STEP_PCT = 5
+STATION_SPEED_MIN_PCT = 5
 MAX_TICKS_PER_FRAME = 20_000   # if the PC can't keep up, run slower instead of freezing
 METRICS_REFRESH_S = 0.5        # recomputing OEE scans the whole event log, so not every frame
 
@@ -79,6 +84,7 @@ class FactoryView:
         self._station_oee = {}    # line name -> {station: StationOEE}
         self._quality = {}        # line name -> QualityReport
         self._factory_totals = None
+        self.selected: tuple[str, str] | None = None   # (line, station) chosen with Tab; set by run()
 
     # ---- public -------------------------------------------------------------
 
@@ -139,7 +145,11 @@ class FactoryView:
         pygame.draw.rect(surface, PANEL, rect, border_radius=8)
         pygame.draw.rect(surface, STATE_COLORS[st.state], (rect.x, rect.y, rect.w, 30),
                          border_top_left_radius=8, border_top_right_radius=8)
-        self._text(surface, st.name.upper(), (rect.x + 8, rect.y + 6), self.font)
+        is_selected = self.selected == (line, st.name)
+        speed = f"   {st.speed_pct:.0f}%" if st.speed_pct < 100 or is_selected else ""
+        self._text(surface, st.name.upper() + speed, (rect.x + 8, rect.y + 6), self.font)
+        if is_selected:
+            pygame.draw.rect(surface, TEXT, rect, width=2, border_radius=8)
 
         lines = [
             (st.state.value, TEXT),
@@ -209,7 +219,8 @@ class FactoryView:
             label = self.small.render(state.value, True, TEXT)
             surface.blit(label, (x + 20, y))
             x += 40 + label.get_width()
-        self._text(surface, "Up/Down: speed   Space: pause   Esc: quit", (20, surface.get_height() - 26),
+        self._text(surface, "Up/Down: sim speed   Space: pause   Tab: select station   "
+                            "Left/Right: station speed   Esc: quit", (20, surface.get_height() - 26),
                    self.small, DIM_TEXT)
 
     # ---- helpers ---------------------------------------------------------------
@@ -237,6 +248,19 @@ def advance(model, speed: float, frame_s: float, tick_debt: float) -> float:
     return tick_debt
 
 
+def adjustable_stations(factory: Factory) -> list[tuple[str, str]]:
+    """(line, station) pairs whose speed can be changed (not the fixed-speed oven)."""
+    return [(name, st.name) for name, sim in factory.lines.items()
+            for st in sim.stations if not st.is_pipeline]
+
+
+def change_station_speed(factory: Factory, selected: tuple[str, str], delta_pct: float) -> None:
+    """Nudge one station's speed, kept between STATION_SPEED_MIN_PCT and 100 %."""
+    line, station = selected
+    st = factory.lines[line].station(station)
+    st.set_speed(min(100.0, max(STATION_SPEED_MIN_PCT, st.speed_pct + delta_pct)))
+
+
 def run(factory: Factory, speed: float = 60.0) -> None:
     """Open a window and run the factory live until the user quits."""
     pygame.init()
@@ -247,6 +271,8 @@ def run(factory: Factory, speed: float = 60.0) -> None:
     speed_index = min(range(len(SPEEDS)), key=lambda i: abs(SPEEDS[i] - speed))
     paused = False
     tick_debt = 0.0   # fractional ticks carried to the next frame, so slow speeds stay exact
+    selectable = adjustable_stations(factory)
+    selected_index = -1   # nothing selected until Tab is pressed
 
     running = True
     while running:
@@ -263,6 +289,12 @@ def run(factory: Factory, speed: float = 60.0) -> None:
                     speed_index = min(speed_index + 1, len(SPEEDS) - 1)
                 elif event.key in (pygame.K_DOWN, pygame.K_MINUS, pygame.K_KP_MINUS):
                     speed_index = max(speed_index - 1, 0)
+                elif event.key == pygame.K_TAB:
+                    selected_index = (selected_index + 1) % len(selectable)
+                    view.selected = selectable[selected_index]
+                elif event.key in (pygame.K_LEFT, pygame.K_RIGHT) and view.selected:
+                    step = STATION_SPEED_STEP_PCT if event.key == pygame.K_RIGHT else -STATION_SPEED_STEP_PCT
+                    change_station_speed(factory, view.selected, step)
 
         if not paused:
             tick_debt = advance(factory, SPEEDS[speed_index], frame_s, tick_debt)

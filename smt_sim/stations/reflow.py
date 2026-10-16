@@ -89,6 +89,12 @@ class ReflowOven(Station):
     def cycle_time_for(self, board: Board) -> float:
         return self.entry_interval_s
 
+    def set_speed(self, speed_pct: float) -> None:
+        """The belt speed is set by the temperature profile, so it can't be slowed."""
+        if speed_pct != 100:
+            raise ValueError(f"{self.name}: oven speed is fixed by its profile (transit_time_s)")
+        super().set_speed(speed_pct)
+
     def boards_inside(self) -> list[Board]:
         return [item.board for item in self.conveyor]
 

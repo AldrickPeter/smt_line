@@ -79,6 +79,9 @@ line:
   #     weibull:        shape (>1), scale_s     rising hazard (wear-out)
   #   changeover        SETUP when the first board of a new product arrives:
   #                     reason code + time_s (pick-and-place adds per_feeder_s)
+  #   speed_pct         percent of rated speed (default 100). Cycle times are
+  #                     rated / speed; OEE still measures against rated speed,
+  #                     so running slower shows as a performance loss.
   stations:
     - name: printer
       type: printer
@@ -133,8 +136,12 @@ line:
     - name: pnp
       type: pnp
       board_handling_s: 8.0          # transfer in/out + fiducial alignment
-      time_per_component_s: 0.25     # e.g. 8 + 0.25 * 120 = 38 s/board -> bottleneck
+      time_per_component_s: 0.25     # rated: e.g. 8 + 0.25 * 120 = 38 s/board -> bottleneck
       cycle_time_sd_s: 1.5
+      speed_pct: 100                 # try 80-90: slower, but more accurate
+      speed_effects:                 # how head speed changes accuracy (s = speed / 100)
+        offset_sd_exponent: 0.75     # offset spread x s^0.75  (80 % -> 0.85x)
+        pick_fail_exponent: 1.0      # pick failures x s^1.0   (80 % -> 0.80x)
       changeover: {reason: FEEDER_CHANGE, time_s: 300, per_feeder_s: 90}
       failures:
         - reason: CONVEYOR_JAM

@@ -25,6 +25,16 @@ True defects: a part placed further from its pad than its `tolerance_um`
 is a MISPLACEMENT (origin: pnp), with the nozzle and offset as detail, so a
 clogged or worn nozzle is traceable.
 
+Head speed (`speed_pct`, see Station.set_speed): running below rated speed
+makes every board take longer, but places more accurately and drops fewer
+parts. Both effects follow a power law of the speed fraction s = speed/100:
+
+    offset spread  x s ** offset_sd_exponent    (e.g. 0.75: at 80 % -> 0.85x)
+    pick failures  x s ** pick_fail_exponent    (e.g. 1.0:  at 80 % -> 0.80x)
+
+A power law keeps both factors positive at any speed and equal to 1 at
+100 %, with one tunable number each (from `speed_effects` in the config).
+
 Changeover: the machine has a fixed number of feeder slots. A new product's
 parts that are not mounted yet are swapped in, replacing feeders the new
 product does not use. Changeover time = fixed part + time per feeder swapped,
@@ -64,6 +74,10 @@ class PickAndPlace(Station):
             self.splice_miss_probability = float(feeder_cfg["splice_miss_probability"])
             self.reel_change_time_s = float(feeder_cfg["reel_change_time_s"])
 
+        effects = self.params.get("speed_effects", {})
+        self.offset_sd_exponent = float(effects.get("offset_sd_exponent", 0.0))
+        self.pick_fail_exponent = float(effects.get("pick_fail_exponent", 0.0))
+
         self.mispick_count = 0   # total failed picks (parts wasted)
         self._pick_counter = 0   # drives the nozzle round robin
         # Picking progress for the current board (kept across a mid-board stop).
@@ -76,6 +90,11 @@ class PickAndPlace(Station):
         handling_s = self.params["board_handling_s"]
         per_part_s = self.params["time_per_component_s"]
         return handling_s + per_part_s * board.component_count
+
+    def speed_effect_scales(self) -> tuple[float, float]:
+        """(offset spread scale, pick-failure scale) at the current speed."""
+        s = self.speed_fraction
+        return s ** self.offset_sd_exponent, s ** self.pick_fail_exponent
 
     # ---- changeover ---------------------------------------------------------
 
@@ -126,6 +145,7 @@ class PickAndPlace(Station):
             self._picks_todo.reverse()   # pop() from the end keeps BOM order
             self._board_mispicks = 0
 
+        offset_scale, fail_scale = self.speed_effect_scales()
         while self._picks_todo:
             part = self._picks_todo[-1]
             feeder = self._feeder_for(part)
@@ -136,15 +156,16 @@ class PickAndPlace(Station):
 
             nozzle = self.nozzles[self._pick_counter % len(self.nozzles)]
             self._pick_counter += 1
-            offset_um, nozzle_failed = nozzle.pick()
-            feeder_failed = self.rng.random() < feeder.mispick_rate
+            offset_um, nozzle_failed = nozzle.pick(offset_scale, fail_scale)
+            feeder_failed = self.rng.random() < feeder.mispick_rate * fail_scale
             feeder.qty -= 1
             self._maybe_call_operator(feeder, board)
 
             if nozzle_failed or feeder_failed:
                 self.mispick_count += 1
                 self._board_mispicks += 1
-                self.remaining_s += self.params["time_per_component_s"]   # retry costs a pick
+                # A retry costs one more pick, at the current speed.
+                self.remaining_s += self.params["time_per_component_s"] / self.speed_fraction
                 nozzle.consecutive_fails += 1
                 if nozzle.consecutive_fails >= self.clog_detect_fails:
                     nozzle.clean()
