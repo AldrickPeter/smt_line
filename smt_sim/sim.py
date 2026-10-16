@@ -13,6 +13,7 @@ from smt_sim.buffer import Buffer, LineExit
 from smt_sim.components import Operator
 from smt_sim.config import load_config
 from smt_sim.events import EventLog
+from smt_sim.orders import OrderTracker, orders_from_config
 from smt_sim.station import Station
 from smt_sim.stations.inspection import InspectionStation, SolderPasteInspection
 from smt_sim.stations.pnp import PickAndPlace
@@ -73,6 +74,7 @@ class Simulator:
         self.stations: list[Station] = []
         self.buffers: list[Buffer] = []
         self._build_line(config["line"])
+        self._connect_orders(config.get("orders", []))
 
     def _build_line(self, line_cfg: dict[str, Any]) -> None:
         operator = Operator(line_cfg["operator"], self.rng) if "operator" in line_cfg else None
@@ -92,6 +94,29 @@ class Simulator:
             station = cls(st_cfg["name"], st_cfg, upstream, downstream, self.event_log, self.rng, operator)
             self.stations.append(station)
             upstream = downstream
+
+    def _connect_orders(self, order_cfgs: list[dict[str, Any]]) -> None:
+        """If the config lists customer orders, track them on this line."""
+        self.orders = orders_from_config(order_cfgs)
+        self.order_tracker: OrderTracker | None = None
+        if not self.orders:
+            return
+        tracker = OrderTracker(self.orders)
+        for job in self.source.jobs:
+            order_id = job.get("order")
+            if order_id is None:
+                continue
+            if order_id not in tracker.orders:
+                raise ValueError(f"Job refers to unknown order {order_id!r}")
+            if tracker.orders[order_id].product != job["product"]:
+                raise ValueError(f"Job for order {order_id} has the wrong product {job['product']!r}")
+        self.order_tracker = tracker
+        self.source.tracker = tracker
+        self.sink.on_arrival = tracker.on_good
+        for st in self.stations:
+            rejects = getattr(st, "rejects", None)
+            if rejects is not None:
+                rejects.on_arrival = tracker.on_reject
 
     # ---- running ----------------------------------------------------------
 
@@ -118,6 +143,20 @@ class Simulator:
             item = self._scheduled.pop(0)
             item.action(self)
             self.intervention_log.append((self.time_s, item.label))
+
+    def orders_done(self) -> bool:
+        """True when every order on this line has its good boards (or there are no orders)."""
+        return self.order_tracker is None or self.order_tracker.all_done()
+
+    def run_until_orders_done(self, max_s: float, check_every_s: float = 60.0) -> bool:
+        """Run until all orders are complete or `max_s` of sim time has passed.
+
+        Returns True if the orders were finished. Checks every `check_every_s`
+        (the check is cheap, but there is no need to do it every tick).
+        """
+        while not self.orders_done() and self.time_s < max_s:
+            self.run(min(check_every_s, max_s - self.time_s))
+        return self.orders_done()
 
     def run(self, seconds: float) -> None:
         """Run headless for `seconds` of simulated time."""

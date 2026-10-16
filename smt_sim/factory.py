@@ -88,6 +88,15 @@ class Factory:
         for _ in range(round(seconds / self.dt_s)):
             self.step()
 
+    def orders_done(self) -> bool:
+        return all(sim.orders_done() for sim in self.lines.values())
+
+    def run_until_orders_done(self, max_s: float, check_every_s: float = 60.0) -> bool:
+        """Run all lines in lockstep until every order on every line is done (or max_s)."""
+        while not self.orders_done() and self.time_s < max_s:
+            self.run(min(check_every_s, max_s - self.time_s))
+        return self.orders_done()
+
     # ---- inspection ---------------------------------------------------------
 
     @property

@@ -1,6 +1,7 @@
 """Finite FIFO buffer (a short conveyor) between two stations."""
 
 from collections import deque
+from collections.abc import Callable
 
 from smt_sim.board import Board
 from smt_sim.defects import Disposition
@@ -19,6 +20,8 @@ class Buffer:
         self.name = name
         self.capacity = capacity
         self._boards: deque[Board] = deque()
+        # Optional listener told about every board that arrives (used to track orders).
+        self.on_arrival: Callable[[Board], None] | None = None
 
     def has_space(self) -> bool:
         return self.capacity is None or len(self._boards) < self.capacity
@@ -30,6 +33,8 @@ class Buffer:
         if not self.has_space():
             raise RuntimeError(f"Buffer {self.name} is full")
         self._boards.append(board)
+        if self.on_arrival is not None:
+            self.on_arrival(board)
 
     def peek(self) -> Board:
         """The board that pop() would return, without removing it."""

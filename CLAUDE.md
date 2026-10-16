@@ -8,7 +8,7 @@ The developer is building this for a class and as a portfolio piece for an intel
 
 ## Scope right now
 
-Only the simulator and a pygame visualization. Do not build OPC UA, MQTT, databases, dashboards, or schedulers unless asked. But design so those layers can attach cleanly later (see "Interfaces for later phases").
+The simulator, a pygame visualization, and (now in progress) order-based production planning: dispatching rules vs exact optimization, evaluated in the simulator (see "Planning milestones" below). Do not build OPC UA, MQTT, databases or dashboards unless asked. But design so those layers can attach cleanly later (see "Interfaces for later phases").
 
 ## Tech stack
 
@@ -130,6 +130,22 @@ smt_sim/
 6. **Pygame view**: stations colored by state, buffer fill, counts, live OEE, speed control.
 7. **Scenarios**: stencil wear, feeder depletion, injected nozzle fault. Test: metrics point to the correct root cause.
 8. **Multiple lines** (done): `smt_sim/factory.py` runs several independent `Simulator`s on one clock from `config/factory.yaml` (base config + per-line `config_overrides` / `station_overrides`), each with its own seed derived from one factory seed via `SeedSequence.spawn`. Tags are keyed `line/entity`. Lines share nothing yet; a shared operator or one order book dispatched across lines would live in `Factory`.
+## Planning milestones (order-based scheduling)
+
+Idea: a planner decides which order runs on which line and in what sequence, using a simple deterministic **planning model** (time per good board per line/product, sequence-dependent changeover matrix, both calibrated from the simulator). The **simulator** then executes the plan under randomness, over many seeds with common random numbers (same seeds for every method), and measures what really happened. The planning code lives in a separate `planning/` package; the simulation core never imports OR-Tools.
+
+Decisions: objective = weighted tardiness against due dates (makespan as tie-breaker); both lines, any product on either line; no lot splitting (one lot per order); rejected boards are replaced while the order's lot is running, and any later shortfall gets a top-up lot at the end of that line's plan. Solvers: OR-Tools CP-SAT, and a MILP via OR-Tools `pywraplp` (SCIP).
+
+- **P1 Orders in the simulator**: order YAML, `order_id` on boards, jobs tied to orders, reject replacement + top-ups, per-order completion times, run until all orders are done.
+- **P2 Planning model**: time per good board per (line, product) and changeover matrix per line, calibrated by simulation.
+- **P3 Plan + evaluator**: `Plan` (per line: sequence of lots) -> per-line configs -> factory run over seeds -> KPIs (makespan, weighted tardiness, late orders, setup time, OEE, FPY, top-ups).
+- **P4 Dispatching rules**: FIFO, EDD, SPT, minimum changeover, with earliest-completion line assignment.
+- **P5 Optimizers**: CP-SAT (circuit per line with setup times) and MILP (big-M precedence); checked against brute force on small orders.
+- **P6 Comparison + charts**: Gantt per method, KPI mean ± 95 % CI, distribution over seeds, paired improvement vs FIFO, planned vs simulated, solver scaling.
+- **P7 (optional)** Re-planning after disruptions.
+
+## Extensions after the simulator milestones
+
 9. **Equipment speed** (done): `speed_pct` per station (config, `Station.set_speed()`, `set_speed` scenario action, `speed_pct` tag, Tab + Left/Right in the viewer). Cycle time = rated / speed; OEE stays measured against rated speed, so slow running is a performance loss. Pick-and-place offset spread and pick failures scale as speed^exponent (`speed_effects`), clog effects don't. The reflow oven's speed is fixed by its profile.
 
 ## Conventions
