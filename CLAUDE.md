@@ -129,6 +129,7 @@ smt_sim/
 5. **Boards and defects**: measurements, true vs detected defects, AOI/ICT detection, FPY, attribution.
 6. **Pygame view**: stations colored by state, buffer fill, counts, live OEE, speed control.
 7. **Scenarios**: stencil wear, feeder depletion, injected nozzle fault. Test: metrics point to the correct root cause.
+8. **Multiple lines** (done): `smt_sim/factory.py` runs several independent `Simulator`s on one clock from `config/factory.yaml` (base config + per-line `config_overrides` / `station_overrides`), each with its own seed derived from one factory seed via `SeedSequence.spawn`. Tags are keyed `line/entity`. Lines share nothing yet; a shared operator or one order book dispatched across lines would live in `Factory`.
 
 ## Conventions
 

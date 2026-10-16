@@ -32,7 +32,7 @@ from typing import Any
 
 import yaml
 
-from smt_sim.config import load_config
+from smt_sim.config import deep_merge, load_config
 from smt_sim.sim import Simulator
 
 SCENARIO_DIR = Path(__file__).resolve().parent.parent / "config" / "scenarios"
@@ -142,11 +142,3 @@ def load_scenario(path_or_name: str | Path, base_config: dict[str, Any] | None =
         expected_root_cause=raw.get("expected_root_cause", {}),
     )
 
-
-def deep_merge(target: dict[str, Any], overrides: dict[str, Any]) -> None:
-    """Merge `overrides` into `target` in place. Nested dicts merge; anything else replaces."""
-    for key, value in overrides.items():
-        if isinstance(value, dict) and isinstance(target.get(key), dict):
-            deep_merge(target[key], value)
-        else:
-            target[key] = copy.deepcopy(value)

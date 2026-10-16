@@ -31,3 +31,25 @@ def make_deterministic(config: dict[str, Any]) -> dict[str, Any]:
         for key in random_keys:
             st.pop(key, None)
     return cfg
+
+
+def deep_merge(target: dict[str, Any], overrides: dict[str, Any]) -> None:
+    """Merge `overrides` into `target` in place. Nested dicts merge; anything else replaces."""
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            deep_merge(target[key], value)
+        else:
+            target[key] = copy.deepcopy(value)
+
+
+def apply_station_overrides(config: dict[str, Any], overrides: dict[str, dict[str, Any]]) -> None:
+    """Deep-merge per-station overrides into the station configs, matched by name.
+
+    Needed because `line.stations` is a list, and deep_merge replaces lists
+    instead of merging into them.
+    """
+    for name, station_overrides in overrides.items():
+        station = next((st for st in config["line"]["stations"] if st["name"] == name), None)
+        if station is None:
+            raise ValueError(f"No station named {name!r} to override")
+        deep_merge(station, station_overrides)
